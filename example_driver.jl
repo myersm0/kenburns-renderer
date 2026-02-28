@@ -50,10 +50,11 @@ function read_status()
 	end
 end
 
-function wait_for(desc, condition; timeout=15.0)
+function wait_for(desc, condition, process; timeout=15.0)
 	println("waiting for: $desc")
 	deadline = time() + timeout
 	while time() < deadline
+		process_running(process) || return nothing
 		status = read_status()
 		if status !== nothing && condition(status)
 			println("  got it: $status")
@@ -65,32 +66,36 @@ function wait_for(desc, condition; timeout=15.0)
 	return nothing
 end
 
+function hold(seconds, process)
+	deadline = time() + seconds
+	while time() < deadline
+		process_running(process) || return false
+		sleep(0.05)
+	end
+	return true
+end
+
 process = run(`./slideshow $command_dir --width 5120 --height 2880`, wait=false)
 sleep(0.5)
 
 global index = 1
 kf = random_keyframe()
 send_load(paths[index], kf)
-wait_for("first image holding", s -> s.phase == "holding")
+wait_for("first image holding", s -> s.phase == "holding", process)
 
 while process_running(process)
 	global index = mod1(index + 1, length(paths))
-	global kf = random_keyframe()
+	kf = random_keyframe()
 	send_load(paths[index], kf)
 
-	wait_for("preload ready", s -> s.preload_ready)
-	sleep(4.0)
-	process_running(process) || break
+	wait_for("preload started", s -> !s.preload_ready, process; timeout=5.0)
+	wait_for("preload ready", s -> s.preload_ready, process)
+	hold(4.0, process) || break
 
 	send_command("""{"command":"transition"}""")
 
-	# first wait to enter transitioning
-	result = wait_for("transition started", s -> s.phase == "transitioning"; timeout=5.0)
-	result === nothing && break
-
-	# then wait for it to finish
-	result = wait_for("transition done", s -> s.phase == "holding"; timeout=30.0)
-	result === nothing && break
+	wait_for("transition started", s -> s.phase == "transitioning", process; timeout=5.0) === nothing && break
+	wait_for("transition done", s -> s.phase == "holding", process; timeout=30.0) === nothing && break
 end
 
 try wait(process) catch end
