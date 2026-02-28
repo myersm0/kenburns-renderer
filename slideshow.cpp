@@ -603,6 +603,8 @@ void run_interactive(slideshow_config& config) {
 			if (keypress >= 0) {
 				printf("key %d\n", keypress);
 				fflush(stdout);
+				if (keypress == 27 || keypress == 113)
+					running = false;
 			}
 
 			if (fade_progress >= 1.0) {
@@ -632,6 +634,8 @@ void run_interactive(slideshow_config& config) {
 			if (keypress >= 0) {
 				printf("key %d\n", keypress);
 				fflush(stdout);
+				if (keypress == 27 || keypress == 113)
+					running = false;
 			}
 		}
 
