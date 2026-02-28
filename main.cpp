@@ -63,7 +63,10 @@ int main(int argc, char** argv) {
 
 		switch (cmd.type) {
 		case CommandType::Load:
-			state.load(cmd.path, cmd.kf);
+			if (cmd.has_style)
+				state.load_with_style(cmd.path, cmd.style);
+			else
+				state.load(cmd.path, cmd.kf);
 			if (state.get_phase() == SlideshowPhase::Holding)
 				current_image_path = cmd.path;
 			break;

@@ -16,6 +16,9 @@ struct Command {
 	CommandType type = CommandType::None;
 	std::string path;
 	Keyframe kf;
+	KeyframeParams style;
+	bool has_raw_keyframe = false;
+	bool has_style = false;
 	std::string config_key;
 	double config_value = 0.0;
 };
@@ -110,22 +113,62 @@ public:
 		if (type == "load") {
 			cmd.type = CommandType::Load;
 			cmd.path = get_string("path");
-			cmd.kf.start_x = get_double("start_x");
-			cmd.kf.start_y = get_double("start_y");
-			cmd.kf.start_zoom = get_double("start_zoom");
-			cmd.kf.end_x = get_double("end_x");
-			cmd.kf.end_y = get_double("end_y");
-			cmd.kf.end_zoom = get_double("end_zoom");
-		} else if (type == "transition") {
-			cmd.type = CommandType::Transition;
-		} else if (type == "skip") {
-			cmd.type = CommandType::Skip;
-		} else if (type == "quit") {
-			cmd.type = CommandType::Quit;
-		} else if (type == "config") {
-			cmd.type = CommandType::Config;
-			cmd.config_key = get_string("key");
-			cmd.config_value = get_double("value");
+
+			std::string focus = get_string("focus");
+			if (!focus.empty()) {
+				cmd.has_style = true;
+
+				if (focus == "center") cmd.style.focus = FocusMethod::Center;
+				else if (focus == "random") cmd.style.focus = FocusMethod::Random;
+				else if (focus == "specific") cmd.style.focus = FocusMethod::Specific;
+				else if (focus == "union") cmd.style.focus = FocusMethod::Union;
+
+				std::string zoom_str = get_string("zoom");
+				if (zoom_str == "fixed") cmd.style.zoom = ZoomMethod::Fixed;
+				else if (zoom_str == "random") cmd.style.zoom = ZoomMethod::Random;
+				else if (zoom_str == "fit") cmd.style.zoom = ZoomMethod::Fit;
+				else if (zoom_str == "fit_points") cmd.style.zoom = ZoomMethod::FitPoints;
+
+				std::string motion_str = get_string("motion");
+				if (motion_str == "static") cmd.style.motion = MotionStyle::Static;
+				else if (motion_str == "zoom_in") cmd.style.motion = MotionStyle::ZoomIn;
+				else if (motion_str == "zoom_out") cmd.style.motion = MotionStyle::ZoomOut;
+				else if (motion_str == "drift") cmd.style.motion = MotionStyle::Drift;
+				else if (motion_str == "pan_to") cmd.style.motion = MotionStyle::PanTo;
+
+				double zm = get_double("zoom_min");
+				double zx = get_double("zoom_max");
+				if (zm > 0.0) cmd.style.zoom_min = zm;
+				if (zx > 0.0) cmd.style.zoom_max = zx;
+
+				double drift = get_double("drift_magnitude");
+				if (drift > 0.0) cmd.style.drift_magnitude = drift;
+
+				double pad = get_double("padding");
+				if (pad > 0.0) cmd.style.padding = pad;
+
+				std::string points_str = get_string("points");
+				if (!points_str.empty()) {
+					std::istringstream pss(points_str);
+					std::string pair;
+					while (std::getline(pss, pair, ';')) {
+						auto comma = pair.find(',');
+						if (comma != std::string::npos) {
+							double px = std::stod(pair.substr(0, comma));
+							double py = std::stod(pair.substr(comma + 1));
+							cmd.style.points.push_back({px, py});
+						}
+					}
+				}
+			} else {
+				cmd.has_raw_keyframe = true;
+				cmd.kf.start_x = get_double("start_x");
+				cmd.kf.start_y = get_double("start_y");
+				cmd.kf.start_zoom = get_double("start_zoom");
+				cmd.kf.end_x = get_double("end_x");
+				cmd.kf.end_y = get_double("end_y");
+				cmd.kf.end_zoom = get_double("end_zoom");
+			}
 		}
 
 		return cmd;

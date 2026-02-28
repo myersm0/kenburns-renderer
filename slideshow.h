@@ -99,6 +99,8 @@ cv::Mat make_motion_kernel(double dx, double dy) {
 	return rotated;
 }
 
+#include "keyframe_builder.h"
+
 // ---- preloader ----
 
 class Preloader {
@@ -177,6 +179,8 @@ public:
 class SlideshowState {
 	SlideshowPhase phase = SlideshowPhase::Idle;
 	Preloader loader;
+	KeyframeParams pending_style;
+	bool has_pending_style = false;
 
 	ImagePyramid* current_pyramid = nullptr;
 	Keyframe current_keyframe;
@@ -233,6 +237,23 @@ public:
 		}
 	}
 
+	void load_with_style(const std::string& path, KeyframeParams& style) {
+		if (phase == SlideshowPhase::Idle) {
+			cv::Mat img = cv::imread(path);
+			if (img.empty()) return;
+			current_pyramid = build_pyramid(img);
+			current_keyframe = build_keyframe(style,
+				img.cols, img.rows, output_width, output_height);
+			current_frame = 0;
+			phase = SlideshowPhase::Holding;
+		} else {
+			pending_style = style;
+			has_pending_style = true;
+			next_path = path;
+			loader.request(path);
+		}
+	}
+
 	void start_transition() {
 		if (phase != SlideshowPhase::Holding) return;
 		if (!loader.ready()) return;
@@ -240,9 +261,17 @@ public:
 		next_pyramid = loader.collect();
 		if (!next_pyramid) return;
 
+		if (has_pending_style) {
+			next_keyframe = build_keyframe(pending_style,
+				next_pyramid->source_width, next_pyramid->source_height,
+				output_width, output_height);
+			has_pending_style = false;
+		}
+
 		transition_start_frame = current_frame;
 		phase = SlideshowPhase::Transitioning;
 	}
+
 
 	void skip() {
 		if (phase == SlideshowPhase::Transitioning && next_pyramid) {
@@ -255,6 +284,12 @@ public:
 		} else if (phase == SlideshowPhase::Holding && loader.ready()) {
 			ImagePyramid* incoming = loader.collect();
 			if (incoming) {
+				if (has_pending_style) {
+					next_keyframe = build_keyframe(pending_style,
+						incoming->source_width, incoming->source_height,
+						output_width, output_height);
+					has_pending_style = false;
+				}
 				if (current_pyramid) delete current_pyramid;
 				current_pyramid = incoming;
 				current_keyframe = next_keyframe;
