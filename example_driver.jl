@@ -1,95 +1,88 @@
-using Random
+using Random, JSON3
 
 dir = ARGS[1]
+command_dir = "/tmp/slideshow"
+mkpath(command_dir)
+
 paths = sort(filter(f -> endswith(lowercase(f), ".jpg"), readdir(dir, join=true)))
 isempty(paths) && error("no jpg files found in $dir")
 
-function random_keyframe(path)
+function random_keyframe()
 	sx = 0.4 + 0.2 * rand()
 	sy = 0.4 + 0.2 * rand()
-	sz = 0.5 + 0.2 * rand()
-	ex = sx + (rand() - 0.5) * 0.15
-	ey = sy + (rand() - 0.5) * 0.15
-	ez = sz + (rand() - 0.5) * 0.1
-	ex = clamp(ex, 0.2, 0.8)
-	ey = clamp(ey, 0.2, 0.8)
-	ez = clamp(ez, 0.5, 1.5)
-	return (path, sx, sy, sz, ex, ey, ez)
+	sz = 0.9 + 0.3 * rand()
+	ex = clamp(sx + (rand() - 0.5) * 0.15, 0.2, 0.8)
+	ey = clamp(sy + (rand() - 0.5) * 0.15, 0.2, 0.8)
+	ez = clamp(sz + (rand() - 0.5) * 0.2, 0.8, 1.5)
+	return (; start_x=sx, start_y=sy, start_zoom=sz,
+		end_x=ex, end_y=ey, end_zoom=ez)
 end
 
-function drain_until(process, prefix; timeout=10.0, quit_flag=Ref(false))
+function send_command(cmd)
+	tmp = joinpath(command_dir, "command.json.tmp")
+	final = joinpath(command_dir, "command.json")
+	open(tmp, "w") do f
+		JSON3.write(f, cmd)
+	end
+	mv(tmp, final, force=true)
+end
+
+function read_status()
+	path = joinpath(command_dir, "status.json")
+	isfile(path) || return nothing
+	try
+		return JSON3.read(read(path, String))
+	catch
+		return nothing
+	end
+end
+
+function wait_for(condition; timeout=15.0, poll_interval=0.05)
 	deadline = time() + timeout
-	while time() < deadline && !quit_flag[]
-		# non-blocking check for data from C++ process
-		if bytesavailable(process) > 0 || !isopen(process)
-			line = readline(process)
-			if startswith(line, "key ")
-				code = parse(Int, split(line)[2])
-				if code == 27
-					quit_flag[] = true
-					return "quit"
-				end
-			end
-			if startswith(line, prefix)
-				return line
-			end
-		else
-			sleep(0.05)
+	while time() < deadline
+		status = read_status()
+		if status !== nothing && condition(status)
+			return status
 		end
+		sleep(poll_interval)
 	end
-	return ""
+	return nothing
 end
 
-function wait_hold(seconds; quit_flag=Ref(false), process=nothing)
-	deadline = time() + seconds
-	while time() < deadline && !quit_flag[]
-		if process !== nothing && bytesavailable(process) > 0
-			line = readline(process)
-			if startswith(line, "key ")
-				code = parse(Int, split(line)[2])
-				if code == 27
-					quit_flag[] = true
-					return
-				end
-			end
-		end
-		sleep(0.05)
-	end
-end
+# launch C++ process (fire and forget)
+process = run(`./slideshow $command_dir --width 5120 --height 2880`, wait=false)
 
-process = open(`./slideshow --interactive --width 1920 --height 1080`, "r+")
-readline(process)
+sleep(0.5)
 
-quit_flag = Ref(false)
+# load first image
+global index = 1
+kf = random_keyframe()
+send_command((; command="load", path=paths[index], kf...))
 
-@async while !quit_flag[]
-	if bytesavailable(stdin) > 0
-		line = readline(stdin)
-		if strip(line) == "q"
-			quit_flag[] = true
-		end
-	else
-		sleep(0.05)
-	end
-end
+wait_for(s -> s.phase == "holding")
 
-index = 1
-path, sx, sy, sz, ex, ey, ez = random_keyframe(paths[index])
-println(process, "image $path $sx $sy $sz $ex $ey $ez")
-readline(process)
-
-while !quit_flag[]
+while process_running(process)
+	# queue next image
 	global index = mod1(index + 1, length(paths))
-	global path, sx, sy, sz, ex, ey, ez = random_keyframe(paths[index])
-	println(process, "image $path $sx $sy $sz $ex $ey $ez")
-	readline(process)
-	wait_hold(4.0; quit_flag, process)
-	if quit_flag[] break end
-	println(process, "next")
-	result = drain_until(process, "done"; quit_flag)
-	if result == "quit" break end
+	global kf = random_keyframe()
+	send_command((; command="load", path=paths[index], kf...))
+
+	# wait for preload
+	wait_for(s -> s.preload_ready == true)
+
+	# hold for a few seconds
+	sleep(4.0)
+
+	# check if still alive
+	process_running(process) || break
+
+	# trigger transition
+	send_command((; command="transition"))
+
+	# wait for transition to finish
+	result = wait_for(s -> s.phase == "holding"; timeout=30.0)
+	result === nothing && break
 end
 
-println(process, "quit")
-close(process)
-
+try wait(process) catch end
+run(ignorestatus(`stty sane`))
