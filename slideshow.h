@@ -239,14 +239,19 @@ public:
 
 	void load_with_style(const std::string& path, KeyframeParams& style) {
 		if (phase == SlideshowPhase::Idle) {
+			fprintf(stderr, "load_with_style: idle, loading sync\n");
 			cv::Mat img = cv::imread(path);
-			if (img.empty()) return;
+			if (img.empty()) { fprintf(stderr, "  imread failed!\n"); return; }
 			current_pyramid = build_pyramid(img);
 			current_keyframe = build_keyframe(style,
 				img.cols, img.rows, output_width, output_height);
+			fprintf(stderr, "  keyframe: sx=%.3f sy=%.3f sz=%.3f ex=%.3f ey=%.3f ez=%.3f\n",
+				current_keyframe.start_x, current_keyframe.start_y, current_keyframe.start_zoom,
+				current_keyframe.end_x, current_keyframe.end_y, current_keyframe.end_zoom);
 			current_frame = 0;
 			phase = SlideshowPhase::Holding;
 		} else {
+			fprintf(stderr, "load_with_style: queueing preload for %s\n", path.c_str());
 			pending_style = style;
 			has_pending_style = true;
 			next_path = path;
@@ -255,21 +260,27 @@ public:
 	}
 
 	void start_transition() {
+		fprintf(stderr, "start_transition: phase=%d ready=%d\n",
+			(int)phase, loader.ready() ? 1 : 0);
 		if (phase != SlideshowPhase::Holding) return;
-		if (!loader.ready()) return;
+		if (!loader.ready()) { fprintf(stderr, "  preload not ready, aborting\n"); return; }
 
 		next_pyramid = loader.collect();
-		if (!next_pyramid) return;
+		if (!next_pyramid) { fprintf(stderr, "  collect returned null\n"); return; }
 
 		if (has_pending_style) {
 			next_keyframe = build_keyframe(pending_style,
 				next_pyramid->source_width, next_pyramid->source_height,
 				output_width, output_height);
+			fprintf(stderr, "  built keyframe: sx=%.3f sy=%.3f sz=%.3f ex=%.3f ey=%.3f ez=%.3f\n",
+				next_keyframe.start_x, next_keyframe.start_y, next_keyframe.start_zoom,
+				next_keyframe.end_x, next_keyframe.end_y, next_keyframe.end_zoom);
 			has_pending_style = false;
 		}
 
 		transition_start_frame = current_frame;
 		phase = SlideshowPhase::Transitioning;
+		fprintf(stderr, "  transitioning at frame %d\n", current_frame);
 	}
 
 

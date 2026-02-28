@@ -79,6 +79,7 @@ public:
 			std::istreambuf_iterator<char>());
 		file.close();
 		std::remove(command_path.c_str());
+		fprintf(stderr, "read command: %s\n", content.c_str());
 
 		if (content.empty()) return cmd;
 
@@ -169,7 +170,19 @@ public:
 				cmd.kf.end_y = get_double("end_y");
 				cmd.kf.end_zoom = get_double("end_zoom");
 			}
+		} else if (type == "transition") {
+			cmd.type = CommandType::Transition;
+		} else if (type == "skip") {
+			cmd.type = CommandType::Skip;
+		} else if (type == "quit") {
+			cmd.type = CommandType::Quit;
+		} else if (type == "config") {
+			cmd.type = CommandType::Config;
+			cmd.config_key = get_string("key");
+			cmd.config_value = get_double("value");
 		}
+
+		return cmd;
 
 		return cmd;
 	}
