@@ -135,3 +135,28 @@ public:
 		std::rename(tmp_path.c_str(), status_path.c_str());
 	}
 };
+
+class EventWriter {
+	std::string event_path;
+	std::ofstream stream;
+
+public:
+	EventWriter(const std::string& dir) {
+		event_path = dir + "/events.log";
+		stream.open(event_path, std::ios::trunc);
+		stream.flush();
+	}
+
+	void write_key(int keycode) {
+		if (keycode < 0) return;
+		stream << "key " << keycode << std::endl;
+	}
+
+	void write_phase(const std::string& phase) {
+		stream << "phase " << phase << std::endl;
+	}
+
+	void write_event(const std::string& name) {
+		stream << name << std::endl;
+	}
+};
