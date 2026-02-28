@@ -32,11 +32,11 @@ struct keyframe {
 };
 
 struct slideshow_config {
-	int output_width = 3024;
-	int output_height = 1964;
+	int output_width = 5120;
+	int output_height = 2880;
 	int fps = 30;
-	double hold_seconds = 5.0;
-	double fade_seconds = 3.0;
+	double hold_seconds = 6.0;
+	double fade_seconds = 6.0;
 	double blur_strength = 0.0;
 	bool interactive = false;
 };
@@ -496,6 +496,7 @@ void run_interactive(slideshow_config& config) {
 	bool has_current = false;
 	bool transitioning = false;
 	bool preload_pending = false;
+	int transition_start_frame = 0;
 
 	printf("ready\n");
 	fflush(stdout);
@@ -544,6 +545,7 @@ void run_interactive(slideshow_config& config) {
 					next_pyr = loader.collect();
 					if (next_pyr) {
 						transitioning = true;
+						transition_start_frame = current_frame;
 						preload_pending = false;
 						printf("transitioning %s\n", next_kf.path.c_str());
 						fflush(stdout);
@@ -579,7 +581,7 @@ void run_interactive(slideshow_config& config) {
 		double a_t = std::min((double)current_frame / total_frames, 1.0);
 
 		if (transitioning) {
-			double fade_progress = (double)(current_frame - hold_frames) / fade_frames;
+			double fade_progress = (double)(current_frame - transition_start_frame) / fade_frames;
 			fade_progress = std::max(0.0, std::min(1.0, fade_progress));
 			double alpha = smoothstep(fade_progress);
 			double b_t = fade_progress * fade_frames / (double)total_frames;
