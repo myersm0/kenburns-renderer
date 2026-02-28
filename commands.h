@@ -41,8 +41,8 @@ public:
 
 		struct stat st;
 		if (stat(command_path.c_str(), &st) != 0) return cmd;
-		if (st.st_mtime == last_mtime) return cmd;
-		last_mtime = st.st_mtime;
+
+		fprintf(stderr, "found command file\n");
 
 		std::ifstream file(command_path);
 		if (!file.is_open()) return cmd;
@@ -51,6 +51,8 @@ public:
 			std::istreambuf_iterator<char>());
 		file.close();
 		std::remove(command_path.c_str());
+
+		fprintf(stderr, "command content: %s\n", content.c_str());
 
 		auto get_string = [&](const std::string& key) -> std::string {
 			std::string search = "\"" + key + "\":\"";
@@ -101,6 +103,7 @@ public:
 			cmd.config_value = get_double("value");
 		}
 
+		fprintf(stderr, "parsed command type: %d\n", (int)cmd.type);
 		return cmd;
 	}
 };

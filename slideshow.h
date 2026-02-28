@@ -292,6 +292,12 @@ public:
 				current_keyframe = next_keyframe;
 				current_frame = (int)(params.b_t * total_frames);
 				phase = SlideshowPhase::Holding;
+
+				params.pyramid_a = current_pyramid;
+				params.a_t = params.b_t;
+				params.kf_a = current_keyframe;
+				params.pyramid_b = nullptr;
+				params.alpha = 0.0;
 			}
 		}
 

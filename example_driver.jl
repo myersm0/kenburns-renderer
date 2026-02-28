@@ -1,4 +1,4 @@
-using Random, JSON3
+using Random
 
 dir = ARGS[1]
 command_dir = "/tmp/slideshow"
@@ -18,69 +18,78 @@ function random_keyframe()
 		end_x=ex, end_y=ey, end_zoom=ez)
 end
 
-function send_command(cmd)
+function send_command(cmd_json::String)
 	tmp = joinpath(command_dir, "command.json.tmp")
-	final = joinpath(command_dir, "command.json")
-	open(tmp, "w") do f
-		JSON3.write(f, cmd)
-	end
-	mv(tmp, final, force=true)
+	final_path = joinpath(command_dir, "command.json")
+	write(tmp, cmd_json)
+	mv(tmp, final_path, force=true)
+	println("sent: $cmd_json")
+end
+
+function send_load(path, kf)
+	send_command("""{"command":"load","path":"$path","start_x":$(kf.start_x),"start_y":$(kf.start_y),"start_zoom":$(kf.start_zoom),"end_x":$(kf.end_x),"end_y":$(kf.end_y),"end_zoom":$(kf.end_zoom)}""")
 end
 
 function read_status()
 	path = joinpath(command_dir, "status.json")
 	isfile(path) || return nothing
 	try
-		return JSON3.read(read(path, String))
-	catch
+		txt = read(path, String)
+		phase = match(r"\"phase\":\"(\w+)\"", txt)
+		preload = match(r"\"preload_ready\":(true|false)", txt)
+		last_key = match(r"\"last_key\":(-?\d+)", txt)
+		phase === nothing && return nothing
+		return (;
+			phase = phase[1],
+			preload_ready = preload !== nothing && preload[1] == "true",
+			last_key = last_key !== nothing ? parse(Int, last_key[1]) : -1,
+		)
+	catch e
+		println("status read error: $e")
 		return nothing
 	end
 end
 
-function wait_for(condition; timeout=15.0, poll_interval=0.05)
+function wait_for(desc, condition; timeout=15.0)
+	println("waiting for: $desc")
 	deadline = time() + timeout
 	while time() < deadline
 		status = read_status()
 		if status !== nothing && condition(status)
+			println("  got it: $status")
 			return status
 		end
-		sleep(poll_interval)
+		sleep(0.05)
 	end
+	println("  timed out!")
 	return nothing
 end
 
-# launch C++ process (fire and forget)
 process = run(`./slideshow $command_dir --width 5120 --height 2880`, wait=false)
-
 sleep(0.5)
 
-# load first image
 global index = 1
 kf = random_keyframe()
-send_command((; command="load", path=paths[index], kf...))
-
-wait_for(s -> s.phase == "holding")
+send_load(paths[index], kf)
+wait_for("first image holding", s -> s.phase == "holding")
 
 while process_running(process)
-	# queue next image
 	global index = mod1(index + 1, length(paths))
 	global kf = random_keyframe()
-	send_command((; command="load", path=paths[index], kf...))
+	send_load(paths[index], kf)
 
-	# wait for preload
-	wait_for(s -> s.preload_ready == true)
-
-	# hold for a few seconds
+	wait_for("preload ready", s -> s.preload_ready)
 	sleep(4.0)
-
-	# check if still alive
 	process_running(process) || break
 
-	# trigger transition
-	send_command((; command="transition"))
+	send_command("""{"command":"transition"}""")
 
-	# wait for transition to finish
-	result = wait_for(s -> s.phase == "holding"; timeout=30.0)
+	# first wait to enter transitioning
+	result = wait_for("transition started", s -> s.phase == "transitioning"; timeout=5.0)
+	result === nothing && break
+
+	# then wait for it to finish
+	result = wait_for("transition done", s -> s.phase == "holding"; timeout=30.0)
 	result === nothing && break
 end
 
