@@ -143,9 +143,9 @@ while process_running(process)
 	alive, keys = hold(4.0, reader, process)
 	alive || break
 
-	if 32 in keys  # spacebar during hold = skip
+	if 32 in keys
 		send_command("""{"command":"skip"}""")
-		wait_for_event("holding after skip", "phase holding", reader, process) === nothing && break
+		wait_for_event("skip done", "skipped", reader, process) === nothing && break
 		continue
 	end
 
@@ -163,8 +163,7 @@ while process_running(process)
 		end
 		if 32 in get_key_events(events)
 			send_command("""{"command":"skip"}""")
-			skipped = true
-			wait_for_event("holding after skip", "phase holding", reader, process)
+			wait_for_event("skip done", "skipped", reader, process)
 			break
 		end
 		sleep(0.05)

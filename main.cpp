@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
 			break;
 		case CommandType::Skip:
 			state.skip();
+			events.write_event("skipped");
 			break;
 		case CommandType::Config:
 			if (cmd.config_key == "blur")

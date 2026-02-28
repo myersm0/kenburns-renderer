@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <sys/stat.h>
 #include "slideshow.h"
+#include <sys/event.h>
+#include <fcntl.h>
 
 enum class CommandType {
 	None, Load, Transition, Skip, Quit, Config
@@ -29,20 +31,43 @@ struct Status {
 
 class CommandReader {
 	std::string command_path;
-	time_t last_mtime = 0;
+	int kq;
+	int dir_fd;
 
 public:
 	CommandReader(const std::string& dir) {
 		command_path = dir + "/command.json";
+
+		kq = kqueue();
+		dir_fd = open(dir.c_str(), O_RDONLY);
+
+		struct kevent change;
+		EV_SET(&change, dir_fd, EVFILT_VNODE,
+			EV_ADD | EV_ENABLE | EV_CLEAR,
+			NOTE_WRITE, 0, nullptr);
+		kevent(kq, &change, 1, nullptr, 0, nullptr);
+	}
+
+	~CommandReader() {
+		if (dir_fd >= 0) close(dir_fd);
+		if (kq >= 0) close(kq);
 	}
 
 	Command poll() {
 		Command cmd;
 
-		struct stat st;
-		if (stat(command_path.c_str(), &st) != 0) return cmd;
+		// non-blocking check for directory changes
+		struct kevent event;
+		struct timespec timeout = {0, 0};
+		int n = kevent(kq, nullptr, 0, &event, 1, &timeout);
 
-		fprintf(stderr, "found command file\n");
+		// even without a kqueue event, check if file exists
+		// (handles the case where file was written before kqueue was set up)
+		if (n <= 0) {
+			struct stat st;
+			if (stat(command_path.c_str(), &st) != 0)
+				return cmd;
+		}
 
 		std::ifstream file(command_path);
 		if (!file.is_open()) return cmd;
@@ -52,7 +77,7 @@ public:
 		file.close();
 		std::remove(command_path.c_str());
 
-		fprintf(stderr, "command content: %s\n", content.c_str());
+		if (content.empty()) return cmd;
 
 		auto get_string = [&](const std::string& key) -> std::string {
 			std::string search = "\"" + key + "\":\"";
@@ -103,7 +128,6 @@ public:
 			cmd.config_value = get_double("value");
 		}
 
-		fprintf(stderr, "parsed command type: %d\n", (int)cmd.type);
 		return cmd;
 	}
 };
