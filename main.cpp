@@ -54,6 +54,8 @@ int main(int argc, char** argv) {
 	SlideshowPhase prev_phase = SlideshowPhase::Idle;
 	bool prev_preload = false;
 	auto last_command_time = std::chrono::steady_clock::now();
+	bool paused = false;
+	RenderParams last_params;
 
 	while (true) {
 		Command cmd = commands.poll();
@@ -91,9 +93,17 @@ int main(int argc, char** argv) {
 			break;
 		}
 
-		RenderParams params = state.tick();
-		int keypress = renderer.render(
-			window_name, params, state.blur_strength, wait_ms);
+		if (!paused)
+			last_params = state.tick();
+		int keypress = renderer.render(window_name, last_params, state.blur_strength, wait_ms);
+
+		// spacebar toggles pause (consumed here, not forwarded to Julia)
+		if (keypress == 32) {
+			paused = !paused;
+			events.write_event(paused ? "paused" : "resumed");
+		} else if (keypress >= 0) {
+			events.write_key(keypress);
+		}
 
 		// edge-triggered key events
 		if (keypress >= 0)
@@ -138,7 +148,7 @@ int main(int argc, char** argv) {
 			_exit(0);
 
 		// ESC
-		if (keypress == 27)
+		if (keypress == 27 || keypress == 113)
 			_exit(0);
 	}
 }
