@@ -54,7 +54,7 @@ inline CropState interpolate_crop(
 	double zoom = kf.start_zoom + (kf.end_zoom - kf.start_zoom) * t;
 
 	double out_aspect = (double)output_width / output_height;
-	double fit_size = std::min(img_w / out_aspect, (double)img_h);
+	double fit_size = std::max(img_w / out_aspect, (double)img_h);
 	double crop_w = (fit_size * out_aspect) / zoom;
 	double crop_h = fit_size / zoom;
 

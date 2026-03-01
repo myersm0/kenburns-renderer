@@ -41,7 +41,7 @@ inline CenterPair clamp_center(
 	int output_width, int output_height
 ) {
 	double out_aspect = (double)output_width / output_height;
-	double fit_size = std::min(image_width / out_aspect, (double)image_height);
+	double fit_size = std::max(image_width / out_aspect, (double)image_height);
 	double crop_w = (fit_size * out_aspect) / zoom;
 	double crop_h = fit_size / zoom;
 
@@ -133,12 +133,9 @@ inline double compute_zoom(
 		return random_double(zoom_min, zoom_max);
 
 	case ZoomMethod::Fit: {
-		// zoom so crop exactly fills image (no borders)
 		double out_aspect = (double)output_width / output_height;
-		double img_aspect = (double)image_width / image_height;
-		if (img_aspect > out_aspect)
-			return (double)image_height / (image_width / out_aspect);
-		return 1.0;
+		double fit_size = std::max(image_width / out_aspect, (double)image_height);
+		return std::max(fit_size * out_aspect / image_width, fit_size / (double)image_height);
 	}
 
 	case ZoomMethod::FitPoints: {
@@ -155,7 +152,7 @@ inline double compute_zoom(
 		double span_y = (max_y - min_y) + 2.0 * padding;
 
 		double out_aspect = (double)output_width / output_height;
-		double fit_size = std::min(image_width / out_aspect, (double)image_height);
+		double fit_size = std::max(image_width / out_aspect, (double)image_height);
 		double needed_w = span_x * image_width;
 		double needed_h = span_y * image_height;
 
