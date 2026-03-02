@@ -55,7 +55,13 @@ int main(int argc, char** argv) {
 	bool prev_preload = false;
 	auto last_command_time = std::chrono::steady_clock::now();
 	bool paused = false;
+	bool debug = false;
 	RenderParams last_params;
+
+	const int key_escape = 27;
+	const int key_quit = 113;
+	const int key_pause = 32;
+	const int key_debug = 63;  // '?'
 
 	while (true) {
 		Command cmd = commands.poll();
@@ -95,19 +101,19 @@ int main(int argc, char** argv) {
 
 		if (!paused)
 			last_params = state.tick();
-		int keypress = renderer.render(window_name, last_params, state.blur_strength, wait_ms);
+		int keypress = renderer.render(
+			window_name, last_params, state.blur_strength, wait_ms, debug);
 
-		// spacebar toggles pause (consumed here, not forwarded to Julia)
-		if (keypress == 32) {
+		if (keypress == key_pause) {
 			paused = !paused;
 			events.write_event(paused ? "paused" : "resumed");
+		} else if (keypress == key_debug) {
+			debug = !debug;
+		} else if (keypress == key_escape || keypress == key_quit) {
+			_exit(0);
 		} else if (keypress >= 0) {
 			events.write_key(keypress);
 		}
-
-		// edge-triggered key events
-		if (keypress >= 0)
-			events.write_key(keypress);
 
 		// edge-triggered phase changes
 		SlideshowPhase cur_phase = state.get_phase();
@@ -145,10 +151,6 @@ int main(int argc, char** argv) {
 		auto elapsed = std::chrono::steady_clock::now() - last_command_time;
 		double idle_seconds = std::chrono::duration<double>(elapsed).count();
 		if (idle_seconds > idle_timeout_seconds)
-			_exit(0);
-
-		// ESC
-		if (keypress == 27 || keypress == 113)
 			_exit(0);
 	}
 }

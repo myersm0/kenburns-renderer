@@ -1,5 +1,6 @@
 #pragma once
 #include "slideshow.h"
+#include <cstdio>
 
 class Renderer {
 	cv::Size out_size;
@@ -30,6 +31,106 @@ class Renderer {
 			cv::Scalar(0, 0, 0));
 	}
 
+	cv::Point image_to_screen(
+		double norm_x, double norm_y, CropState& crop,
+		int source_w, int source_h
+	) {
+		double img_x = norm_x * source_w;
+		double img_y = norm_y * source_h;
+		double sx = (img_x - (crop.center_x - crop.crop_w * 0.5))
+			* out_size.width / crop.crop_w;
+		double sy = (img_y - (crop.center_y - crop.crop_h * 0.5))
+			* out_size.height / crop.crop_h;
+		return cv::Point((int)sx, (int)sy);
+	}
+
+	void draw_debug(cv::Mat& display, RenderParams& params, CropState& crop) {
+		int src_w = params.debug_source_w;
+		int src_h = params.debug_source_h;
+		if (src_w == 0 || src_h == 0) return;
+
+		double fs = out_size.height / 1080.0;
+		int thick_bg = std::max(3, (int)(3 * fs));
+		int thick_fg = std::max(1, (int)(1 * fs));
+		int y = (int)(40 * fs);
+		int line_h = (int)(30 * fs);
+
+		Keyframe& kf = params.debug_keyframe;
+
+		// image boundary
+		cv::Point tl = image_to_screen(0.0, 0.0, crop, src_w, src_h);
+		cv::Point br = image_to_screen(1.0, 1.0, crop, src_w, src_h);
+		cv::rectangle(display, tl, br, cv::Scalar(80, 80, 80), 1);
+
+		// focal points — red filled with white outline
+		for (auto& p : params.debug_points) {
+			cv::Point pt = image_to_screen(p.first, p.second, crop, src_w, src_h);
+			cv::circle(display, pt, 10, cv::Scalar(255, 255, 255), 2);
+			cv::circle(display, pt, 8, cv::Scalar(0, 0, 255), -1);
+		}
+
+		// bounding box of focal points — yellow dashed (solid approx)
+		if (params.debug_points.size() >= 2) {
+			double min_x = 1.0, max_x = 0.0, min_y = 1.0, max_y = 0.0;
+			for (auto& p : params.debug_points) {
+				min_x = std::min(min_x, p.first);
+				max_x = std::max(max_x, p.first);
+				min_y = std::min(min_y, p.second);
+				max_y = std::max(max_y, p.second);
+			}
+			cv::Point bb_tl = image_to_screen(min_x, min_y, crop, src_w, src_h);
+			cv::Point bb_br = image_to_screen(max_x, max_y, crop, src_w, src_h);
+			cv::rectangle(display, bb_tl, bb_br, cv::Scalar(0, 255, 255), 1);
+		}
+
+		// start position — green circle
+		cv::Point start = image_to_screen(kf.start_x, kf.start_y, crop, src_w, src_h);
+		cv::drawMarker(display, start, cv::Scalar(0, 255, 0),
+			cv::MARKER_CROSS, 20, 2);
+
+		// end position — blue circle
+		cv::Point end = image_to_screen(kf.end_x, kf.end_y, crop, src_w, src_h);
+		cv::drawMarker(display, end, cv::Scalar(255, 100, 0),
+			cv::MARKER_TILTED_CROSS, 20, 2);
+
+		// line from start to end — motion path
+		cv::line(display, start, end, cv::Scalar(200, 200, 200), 1);
+
+		// current center — white crosshair
+		int cx = out_size.width / 2;
+		int cy = out_size.height / 2;
+		cv::drawMarker(display, cv::Point(cx, cy), cv::Scalar(255, 255, 255),
+			cv::MARKER_CROSS, 40, 1);
+
+		// text overlay — zoom, progress, keyframe info
+		double current_zoom = kf.start_zoom
+			+ (kf.end_zoom - kf.start_zoom) * smoothstep(params.a_t);
+		char buf[256];
+		snprintf(buf, sizeof(buf), "zoom: %.2f  t: %.2f", current_zoom, params.a_t);
+		cv::putText(display, buf, cv::Point(20, y),
+			 cv::FONT_HERSHEY_SIMPLEX, 0.7 * fs, cv::Scalar(0, 0, 0), thick_bg);
+		cv::putText(display, buf, cv::Point(20, y),
+			 cv::FONT_HERSHEY_SIMPLEX, 0.7 * fs, cv::Scalar(255, 255, 255), thick_fg);
+		y += line_h;
+
+		snprintf(buf, sizeof(buf), "kf: (%.2f,%.2f,%.2f) -> (%.2f,%.2f,%.2f)",
+			kf.start_x, kf.start_y, kf.start_zoom,
+			kf.end_x, kf.end_y, kf.end_zoom);
+		cv::putText(display, buf, cv::Point(20, y),
+			 cv::FONT_HERSHEY_SIMPLEX, 0.7 * fs, cv::Scalar(0, 0, 0), thick_bg);
+		cv::putText(display, buf, cv::Point(20, y),
+			 cv::FONT_HERSHEY_SIMPLEX, 0.7 * fs, cv::Scalar(255, 255, 255), thick_fg);
+		y += line_h;
+
+		snprintf(buf, sizeof(buf), "src: %dx%d  points: %d",
+			src_w, src_h, (int)params.debug_points.size());
+		cv::putText(display, buf, cv::Point(20, y),
+			 cv::FONT_HERSHEY_SIMPLEX, 0.7 * fs, cv::Scalar(0, 0, 0), thick_bg);
+		cv::putText(display, buf, cv::Point(20, y),
+			 cv::FONT_HERSHEY_SIMPLEX, 0.7 * fs, cv::Scalar(255, 255, 255), thick_fg);
+		y += line_h;
+	}
+
 public:
 	Renderer(int width, int height)
 		: out_size(width, height)
@@ -41,7 +142,7 @@ public:
 	{}
 
 	int render(const char* window_name, RenderParams& params,
-		double blur_strength, int wait_ms
+		double blur_strength, int wait_ms, bool debug = false
 	) {
 		if (!params.valid) return cv::waitKey(wait_ms);
 
@@ -93,6 +194,9 @@ public:
 				display = &blurred;
 			}
 		}
+
+		if (debug)
+			draw_debug(*display, params, sa);
 
 		cv::imshow(window_name, *display);
 		return cv::waitKey(wait_ms);

@@ -37,6 +37,11 @@ struct RenderParams {
 	double alpha = 0.0;
 	double dt = 0.0;
 	bool valid = false;
+
+	std::vector<std::pair<double,double>> debug_points;
+	Keyframe debug_keyframe;
+	int debug_source_w = 0;
+	int debug_source_h = 0;
 };
 
 // ---- pure helpers ----
@@ -184,11 +189,13 @@ class SlideshowState {
 
 	ImagePyramid* current_pyramid = nullptr;
 	Keyframe current_keyframe;
+	std::vector<std::pair<double,double>> current_points;
 	int current_frame = 0;
 	int total_frames = 1;
 
 	ImagePyramid* next_pyramid = nullptr;
 	Keyframe next_keyframe;
+	std::vector<std::pair<double,double>> next_points;
 	std::string next_path;
 	int transition_start_frame = 0;
 
@@ -238,20 +245,22 @@ public:
 	}
 
 	void load_with_style(const std::string& path, KeyframeParams& style) {
+		auto extract_points = [](KeyframeParams& s) {
+			std::vector<std::pair<double,double>> pts;
+			for (auto& p : s.points) pts.push_back({p.x, p.y});
+			return pts;
+		};
+
 		if (phase == SlideshowPhase::Idle) {
-			fprintf(stderr, "load_with_style: idle, loading sync\n");
 			cv::Mat img = cv::imread(path);
-			if (img.empty()) { fprintf(stderr, "  imread failed!\n"); return; }
+			if (img.empty()) return;
 			current_pyramid = build_pyramid(img);
 			current_keyframe = build_keyframe(style,
 				img.cols, img.rows, output_width, output_height);
-			fprintf(stderr, "  keyframe: sx=%.3f sy=%.3f sz=%.3f ex=%.3f ey=%.3f ez=%.3f\n",
-				current_keyframe.start_x, current_keyframe.start_y, current_keyframe.start_zoom,
-				current_keyframe.end_x, current_keyframe.end_y, current_keyframe.end_zoom);
+			current_points = extract_points(style);
 			current_frame = 0;
 			phase = SlideshowPhase::Holding;
 		} else {
-			fprintf(stderr, "load_with_style: queueing preload for %s\n", path.c_str());
 			pending_style = style;
 			has_pending_style = true;
 			next_path = path;
@@ -260,27 +269,24 @@ public:
 	}
 
 	void start_transition() {
-		fprintf(stderr, "start_transition: phase=%d ready=%d\n",
-			(int)phase, loader.ready() ? 1 : 0);
 		if (phase != SlideshowPhase::Holding) return;
-		if (!loader.ready()) { fprintf(stderr, "  preload not ready, aborting\n"); return; }
+		if (!loader.ready()) return;
 
 		next_pyramid = loader.collect();
-		if (!next_pyramid) { fprintf(stderr, "  collect returned null\n"); return; }
+		if (!next_pyramid) return;
 
 		if (has_pending_style) {
 			next_keyframe = build_keyframe(pending_style,
 				next_pyramid->source_width, next_pyramid->source_height,
 				output_width, output_height);
-			fprintf(stderr, "  built keyframe: sx=%.3f sy=%.3f sz=%.3f ex=%.3f ey=%.3f ez=%.3f\n",
-				next_keyframe.start_x, next_keyframe.start_y, next_keyframe.start_zoom,
-				next_keyframe.end_x, next_keyframe.end_y, next_keyframe.end_zoom);
+			next_points.clear();
+			for (auto& p : pending_style.points)
+				next_points.push_back({p.x, p.y});
 			has_pending_style = false;
 		}
 
 		transition_start_frame = current_frame;
 		phase = SlideshowPhase::Transitioning;
-		fprintf(stderr, "  transitioning at frame %d\n", current_frame);
 	}
 
 
@@ -290,6 +296,7 @@ public:
 			current_pyramid = next_pyramid;
 			next_pyramid = nullptr;
 			current_keyframe = next_keyframe;
+			current_points = next_points;
 			current_frame = 0;
 			phase = SlideshowPhase::Holding;
 		} else if (phase == SlideshowPhase::Holding && loader.ready()) {
@@ -299,11 +306,15 @@ public:
 					next_keyframe = build_keyframe(pending_style,
 						incoming->source_width, incoming->source_height,
 						output_width, output_height);
+					next_points.clear();
+					for (auto& p : pending_style.points)
+						next_points.push_back({p.x, p.y});
 					has_pending_style = false;
 				}
 				if (current_pyramid) delete current_pyramid;
 				current_pyramid = incoming;
 				current_keyframe = next_keyframe;
+				current_points = next_points;
 				current_frame = 0;
 			}
 		}
@@ -321,6 +332,10 @@ public:
 		params.kf_a = current_keyframe;
 		params.dt = dt;
 		params.valid = true;
+		params.debug_points = current_points;
+		params.debug_keyframe = current_keyframe;
+		params.debug_source_w = current_pyramid->source_width;
+		params.debug_source_h = current_pyramid->source_height;
 
 		if (phase == SlideshowPhase::Transitioning) {
 			double fade_progress = (double)(current_frame - transition_start_frame) / fade_frames;
@@ -336,6 +351,7 @@ public:
 				current_pyramid = next_pyramid;
 				next_pyramid = nullptr;
 				current_keyframe = next_keyframe;
+				current_points = next_points;
 				current_frame = (int)(params.b_t * total_frames);
 				phase = SlideshowPhase::Holding;
 
@@ -344,6 +360,10 @@ public:
 				params.kf_a = current_keyframe;
 				params.pyramid_b = nullptr;
 				params.alpha = 0.0;
+				params.debug_points = current_points;
+				params.debug_keyframe = current_keyframe;
+				params.debug_source_w = current_pyramid->source_width;
+				params.debug_source_h = current_pyramid->source_height;
 			}
 		}
 
