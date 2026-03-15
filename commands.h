@@ -9,7 +9,7 @@
 #include <fcntl.h>
 
 enum class CommandType {
-	None, Load, Transition, Skip, Quit, Config
+	None, Load, Transition, Swap, Cancel, Quit, Config
 };
 
 struct Command {
@@ -21,15 +21,6 @@ struct Command {
 	bool has_style = false;
 	std::string config_key;
 	double config_value = 0.0;
-};
-
-struct Status {
-	std::string phase;
-	std::string image;
-	double progress = 0.0;
-	int last_key = -1;
-	int frame = 0;
-	bool preload_ready = false;
 };
 
 class CommandReader {
@@ -59,13 +50,10 @@ public:
 	Command poll() {
 		Command cmd;
 
-		// non-blocking check for directory changes
 		struct kevent event;
 		struct timespec timeout = {0, 0};
 		int n = kevent(kq, nullptr, 0, &event, 1, &timeout);
 
-		// even without a kqueue event, check if file exists
-		// (handles the case where file was written before kqueue was set up)
 		if (n <= 0) {
 			struct stat st;
 			if (stat(command_path.c_str(), &st) != 0)
@@ -171,8 +159,10 @@ public:
 			}
 		} else if (type == "transition") {
 			cmd.type = CommandType::Transition;
-		} else if (type == "skip") {
-			cmd.type = CommandType::Skip;
+		} else if (type == "swap") {
+			cmd.type = CommandType::Swap;
+		} else if (type == "cancel") {
+			cmd.type = CommandType::Cancel;
 		} else if (type == "quit") {
 			cmd.type = CommandType::Quit;
 		} else if (type == "config") {
@@ -195,17 +185,17 @@ public:
 		tmp_path = dir + "/status.json.tmp";
 	}
 
-	void write(Status& status) {
+	void write(const std::string& phase, bool preload_ready,
+		bool fade_complete, bool paused
+	) {
 		std::ofstream file(tmp_path);
 		if (!file.is_open()) return;
 
 		file << "{"
-			<< "\"phase\":\"" << status.phase << "\","
-			<< "\"image\":\"" << status.image << "\","
-			<< "\"progress\":" << status.progress << ","
-			<< "\"last_key\":" << status.last_key << ","
-			<< "\"frame\":" << status.frame << ","
-			<< "\"preload_ready\":" << (status.preload_ready ? "true" : "false")
+			<< "\"phase\":\"" << phase << "\","
+			<< "\"preload_ready\":" << (preload_ready ? "true" : "false") << ","
+			<< "\"fade_complete\":" << (fade_complete ? "true" : "false") << ","
+			<< "\"paused\":" << (paused ? "true" : "false")
 			<< "}" << std::endl;
 
 		file.close();
@@ -213,27 +203,19 @@ public:
 	}
 };
 
-class EventWriter {
-	std::string event_path;
+class KeyWriter {
+	std::string path;
 	std::ofstream stream;
 
 public:
-	EventWriter(const std::string& dir) {
-		event_path = dir + "/events.log";
-		stream.open(event_path, std::ios::trunc);
+	KeyWriter(const std::string& dir) {
+		path = dir + "/keys.log";
+		stream.open(path, std::ios::trunc);
 		stream.flush();
 	}
 
-	void write_key(int keycode) {
+	void write(int keycode) {
 		if (keycode < 0) return;
-		stream << "key " << keycode << std::endl;
-	}
-
-	void write_phase(const std::string& phase) {
-		stream << "phase " << phase << std::endl;
-	}
-
-	void write_event(const std::string& name) {
-		stream << name << std::endl;
+		stream << keycode << std::endl;
 	}
 };

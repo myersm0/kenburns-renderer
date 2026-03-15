@@ -202,10 +202,18 @@ class SlideshowState {
 	int hold_frames;
 	int fade_frames;
 	double dt;
+	bool fade_complete_flag = false;
 
 	void compute_dt() {
 		total_frames = hold_frames + fade_frames;
 		dt = 1.0 / std::max(1, total_frames - 1);
+	}
+
+	auto extract_points(KeyframeParams& style) {
+		std::vector<std::pair<double,double>> pts;
+		for (auto& p : style.points)
+			pts.push_back({p.x, p.y});
+		return pts;
 	}
 
 public:
@@ -228,6 +236,7 @@ public:
 
 	SlideshowPhase get_phase() { return phase; }
 	bool preload_ready() { return loader.ready(); }
+	bool fade_complete() { return fade_complete_flag; }
 
 	void load(const std::string& path, Keyframe kf) {
 		if (phase == SlideshowPhase::Idle) {
@@ -245,12 +254,6 @@ public:
 	}
 
 	void load_with_style(const std::string& path, KeyframeParams& style) {
-		auto extract_points = [](KeyframeParams& s) {
-			std::vector<std::pair<double,double>> pts;
-			for (auto& p : s.points) pts.push_back({p.x, p.y});
-			return pts;
-		};
-
 		if (phase == SlideshowPhase::Idle) {
 			cv::Mat img = cv::imread(path);
 			if (img.empty()) return;
@@ -268,29 +271,28 @@ public:
 		}
 	}
 
-	void start_transition() {
-		if (phase != SlideshowPhase::Holding) return;
-		if (!loader.ready()) return;
+	bool start_transition() {
+		if (phase != SlideshowPhase::Holding) return false;
+		if (!loader.ready()) return false;
 
 		next_pyramid = loader.collect();
-		if (!next_pyramid) return;
+		if (!next_pyramid) return false;
 
 		if (has_pending_style) {
 			next_keyframe = build_keyframe(pending_style,
 				next_pyramid->source_width, next_pyramid->source_height,
 				output_width, output_height);
-			next_points.clear();
-			for (auto& p : pending_style.points)
-				next_points.push_back({p.x, p.y});
+			next_points = extract_points(pending_style);
 			has_pending_style = false;
 		}
 
 		transition_start_frame = current_frame;
+		fade_complete_flag = false;
 		phase = SlideshowPhase::Transitioning;
+		return true;
 	}
 
-
-	bool skip() {
+	bool swap() {
 		if (phase == SlideshowPhase::Transitioning && next_pyramid) {
 			if (current_pyramid) delete current_pyramid;
 			current_pyramid = next_pyramid;
@@ -298,29 +300,39 @@ public:
 			current_keyframe = next_keyframe;
 			current_points = next_points;
 			current_frame = 0;
+			fade_complete_flag = false;
 			phase = SlideshowPhase::Holding;
 			return true;
-		} else if (phase == SlideshowPhase::Holding && loader.ready()) {
+		}
+		if (phase == SlideshowPhase::Holding && loader.ready()) {
 			ImagePyramid* incoming = loader.collect();
-			if (incoming) {
-				if (has_pending_style) {
-					next_keyframe = build_keyframe(pending_style,
-						incoming->source_width, incoming->source_height,
-						output_width, output_height);
-					next_points.clear();
-					for (auto& p : pending_style.points)
-						next_points.push_back({p.x, p.y});
-					has_pending_style = false;
-				}
-				if (current_pyramid) delete current_pyramid;
-				current_pyramid = incoming;
-				current_keyframe = next_keyframe;
-				current_points = next_points;
-				current_frame = 0;
-				return true;
+			if (!incoming) return false;
+			if (has_pending_style) {
+				next_keyframe = build_keyframe(pending_style,
+					incoming->source_width, incoming->source_height,
+					output_width, output_height);
+				next_points = extract_points(pending_style);
+				has_pending_style = false;
 			}
+			if (current_pyramid) delete current_pyramid;
+			current_pyramid = incoming;
+			current_keyframe = next_keyframe;
+			current_points = next_points;
+			current_frame = 0;
+			return true;
 		}
 		return false;
+	}
+
+	bool cancel_transition() {
+		if (phase != SlideshowPhase::Transitioning) return false;
+		if (next_pyramid) {
+			delete next_pyramid;
+			next_pyramid = nullptr;
+		}
+		fade_complete_flag = false;
+		phase = SlideshowPhase::Holding;
+		return true;
 	}
 
 	RenderParams tick() {
@@ -350,27 +362,17 @@ public:
 			params.alpha = smoothstep(fade_progress);
 
 			if (fade_progress >= 1.0) {
-				if (current_pyramid) delete current_pyramid;
-				current_pyramid = next_pyramid;
-				next_pyramid = nullptr;
-				current_keyframe = next_keyframe;
-				current_points = next_points;
-				current_frame = (int)(params.b_t * total_frames);
-				phase = SlideshowPhase::Holding;
-
-				params.pyramid_a = current_pyramid;
-				params.a_t = params.b_t;
-				params.kf_a = current_keyframe;
-				params.pyramid_b = nullptr;
-				params.alpha = 0.0;
-				params.debug_points = current_points;
-				params.debug_keyframe = current_keyframe;
-				params.debug_source_w = current_pyramid->source_width;
-				params.debug_source_h = current_pyramid->source_height;
+				fade_complete_flag = true;
+				params.debug_points = next_points;
+				params.debug_keyframe = next_keyframe;
+				params.debug_source_w = next_pyramid->source_width;
+				params.debug_source_h = next_pyramid->source_height;
 			}
 		}
 
-		current_frame++;
+		if (!fade_complete_flag)
+			current_frame++;
+
 		return params;
 	}
 

@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
 
 	int wait_ms = 1000 / fps;
 
-	const char* window_name = "julia";
+	const char* window_name = "slideshow";
 	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
 	cv::moveWindow(window_name, 0, 0);
 	cv::setWindowProperty(window_name, cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
@@ -93,26 +93,44 @@ int main(int argc, char** argv) {
 	Renderer renderer(output_width, output_height);
 	CommandReader commands(command_dir);
 	StatusWriter status_writer(command_dir);
-	EventWriter events(command_dir);
+	KeyWriter key_writer(command_dir);
 
-	std::string current_image_path;
-	SlideshowPhase prev_phase = SlideshowPhase::Idle;
-	bool prev_preload = false;
+	const int key_escape = 27;
+	const int key_quit = 113;
+	const int key_pause = 32;
+	const int key_debug = 63;
+
 	auto last_command_time = std::chrono::steady_clock::now();
 	bool paused = false;
 	bool debug = false;
 	RenderParams last_params;
 
-	const int key_escape = 27;
-	const int key_quit = 113;
-	const int key_pause = 32;
-	const int key_debug = 63;  // '?'
+	SlideshowPhase prev_phase = SlideshowPhase::Idle;
+	bool prev_preload = false;
+	bool prev_fade_complete = false;
+	bool prev_paused = false;
+	bool status_dirty = true;
+
+	auto write_status = [&]() {
+		std::string phase_str;
+		switch (state.get_phase()) {
+		case SlideshowPhase::Idle: phase_str = "idle"; break;
+		case SlideshowPhase::Holding: phase_str = "holding"; break;
+		case SlideshowPhase::Transitioning: phase_str = "transitioning"; break;
+		}
+		status_writer.write(phase_str, state.preload_ready(),
+			state.fade_complete(), paused);
+	};
+
+	write_status();
 
 	while (true) {
 		Command cmd = commands.poll();
 
-		if (cmd.type != CommandType::None)
+		if (cmd.type != CommandType::None) {
 			last_command_time = std::chrono::steady_clock::now();
+			status_dirty = true;
+		}
 
 		switch (cmd.type) {
 		case CommandType::Load:
@@ -120,15 +138,15 @@ int main(int argc, char** argv) {
 				state.load_with_style(cmd.path, cmd.style);
 			else
 				state.load(cmd.path, cmd.kf);
-			if (state.get_phase() == SlideshowPhase::Holding)
-				current_image_path = cmd.path;
 			break;
 		case CommandType::Transition:
 			state.start_transition();
 			break;
-		case CommandType::Skip:
-			if (state.skip())
-				events.write_event("skipped");
+		case CommandType::Swap:
+			state.swap();
+			break;
+		case CommandType::Cancel:
+			state.cancel_transition();
 			break;
 		case CommandType::Config:
 			if (cmd.config_key == "blur")
@@ -151,7 +169,7 @@ int main(int argc, char** argv) {
 
 		if (keypress == key_pause) {
 			paused = !paused;
-			events.write_event(paused ? "paused" : "resumed");
+			status_dirty = true;
 			if (paused)
 				write_pause_info(command_dir, last_params, output_width, output_height);
 		} else if (keypress == key_debug) {
@@ -159,40 +177,24 @@ int main(int argc, char** argv) {
 		} else if (keypress == key_escape || keypress == key_quit) {
 			_exit(0);
 		} else if (keypress >= 0) {
-			events.write_key(keypress);
+			key_writer.write(keypress);
 		}
 
-		// edge-triggered phase changes
+		// detect state changes and write status
 		SlideshowPhase cur_phase = state.get_phase();
-		if (cur_phase != prev_phase) {
-			switch (cur_phase) {
-			case SlideshowPhase::Idle:
-				events.write_phase("idle"); break;
-			case SlideshowPhase::Holding:
-				events.write_phase("holding"); break;
-			case SlideshowPhase::Transitioning:
-				events.write_phase("transitioning"); break;
-			}
-			prev_phase = cur_phase;
-		}
-
-		// edge-triggered preload ready
 		bool cur_preload = state.preload_ready();
-		if (cur_preload && !prev_preload)
-			events.write_event("preload_ready");
-		prev_preload = cur_preload;
+		bool cur_fade_complete = state.fade_complete();
 
-		// status file for debugging/monitoring
-		Status status;
-		switch (cur_phase) {
-		case SlideshowPhase::Idle: status.phase = "idle"; break;
-		case SlideshowPhase::Holding: status.phase = "holding"; break;
-		case SlideshowPhase::Transitioning: status.phase = "transitioning"; break;
+		if (cur_phase != prev_phase || cur_preload != prev_preload ||
+				cur_fade_complete != prev_fade_complete ||
+				paused != prev_paused || status_dirty) {
+			write_status();
+			prev_phase = cur_phase;
+			prev_preload = cur_preload;
+			prev_fade_complete = cur_fade_complete;
+			prev_paused = paused;
+			status_dirty = false;
 		}
-		status.image = current_image_path;
-		status.last_key = keypress;
-		status.preload_ready = cur_preload;
-		status_writer.write(status);
 
 		// idle timeout
 		auto elapsed = std::chrono::steady_clock::now() - last_command_time;
