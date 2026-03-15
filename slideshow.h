@@ -294,15 +294,13 @@ public:
 
 	bool swap() {
 		if (phase == SlideshowPhase::Transitioning && next_pyramid) {
+			 int frames_into_transition = current_frame - transition_start_frame;
 			 if (current_pyramid) delete current_pyramid;
 			 current_pyramid = next_pyramid;
 			 next_pyramid = nullptr;
 			 current_keyframe = next_keyframe;
 			 current_points = next_points;
-			 // maintain animation continuity
-			 double fade_progress = (double)(current_frame - transition_start_frame) / fade_frames;
-			 fade_progress = std::min(fade_progress, 1.0);
-			 current_frame = (int)(fade_progress * fade_frames / (double)total_frames * total_frames);
+			 current_frame = frames_into_transition;
 			 fade_complete_flag = false;
 			 phase = SlideshowPhase::Holding;
 			 return true;
@@ -360,7 +358,7 @@ public:
 			fade_progress = std::min(fade_progress, 1.0);
 
 			params.pyramid_b = next_pyramid;
-			params.b_t = fade_progress * fade_frames / (double)total_frames;
+			params.b_t = (double)(current_frame - transition_start_frame) / total_frames;
 			params.kf_b = next_keyframe;
 			params.alpha = smoothstep(fade_progress);
 
