@@ -290,7 +290,7 @@ public:
 	}
 
 
-	void skip() {
+	bool skip() {
 		if (phase == SlideshowPhase::Transitioning && next_pyramid) {
 			if (current_pyramid) delete current_pyramid;
 			current_pyramid = next_pyramid;
@@ -299,6 +299,7 @@ public:
 			current_points = next_points;
 			current_frame = 0;
 			phase = SlideshowPhase::Holding;
+			return true;
 		} else if (phase == SlideshowPhase::Holding && loader.ready()) {
 			ImagePyramid* incoming = loader.collect();
 			if (incoming) {
@@ -316,8 +317,10 @@ public:
 				current_keyframe = next_keyframe;
 				current_points = next_points;
 				current_frame = 0;
+				return true;
 			}
 		}
+		return false;
 	}
 
 	RenderParams tick() {

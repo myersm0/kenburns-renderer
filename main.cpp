@@ -7,6 +7,51 @@
 #include "renderer.h"
 #include "commands.h"
 
+void write_pause_info(
+	const std::string& dir, RenderParams& params,
+	int output_width, int output_height
+) {
+	if (!params.valid) return;
+
+	CropState crop = interpolate_crop(
+		params.a_t, params.kf_a,
+		params.pyramid_a->source_width,
+		params.pyramid_a->source_height,
+		output_width, output_height
+	);
+
+	double t = smoothstep(params.a_t);
+	double zoom = params.kf_a.start_zoom
+		+ (params.kf_a.end_zoom - params.kf_a.start_zoom) * t;
+
+	std::string tmp = dir + "/pause_info.json.tmp";
+	std::string final_path = dir + "/pause_info.json";
+
+	std::ofstream file(tmp);
+	if (!file.is_open()) return;
+
+	file << "{"
+		<< "\"t\":" << params.a_t
+		<< ",\"zoom\":" << zoom
+		<< ",\"center_x\":" << crop.center_x
+		<< ",\"center_y\":" << crop.center_y
+		<< ",\"crop_w\":" << crop.crop_w
+		<< ",\"crop_h\":" << crop.crop_h
+		<< ",\"source_w\":" << params.pyramid_a->source_width
+		<< ",\"source_h\":" << params.pyramid_a->source_height
+		<< ",\"kf_start_x\":" << params.kf_a.start_x
+		<< ",\"kf_start_y\":" << params.kf_a.start_y
+		<< ",\"kf_start_zoom\":" << params.kf_a.start_zoom
+		<< ",\"kf_end_x\":" << params.kf_a.end_x
+		<< ",\"kf_end_y\":" << params.kf_a.end_y
+		<< ",\"kf_end_zoom\":" << params.kf_a.end_zoom
+		<< ",\"alpha\":" << params.alpha
+		<< "}" << std::endl;
+
+	file.close();
+	std::rename(tmp.c_str(), final_path.c_str());
+}
+
 int main(int argc, char** argv) {
 	if (argc < 2) {
 		printf("usage: slideshow <command_dir> [options]\n");
@@ -36,7 +81,7 @@ int main(int argc, char** argv) {
 
 	int wait_ms = 1000 / fps;
 
-	const char* window_name = "slideshow";
+	const char* window_name = "julia";
 	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
 	cv::moveWindow(window_name, 0, 0);
 	cv::setWindowProperty(window_name, cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
@@ -82,8 +127,8 @@ int main(int argc, char** argv) {
 			state.start_transition();
 			break;
 		case CommandType::Skip:
-			state.skip();
-			events.write_event("skipped");
+			if (state.skip())
+				events.write_event("skipped");
 			break;
 		case CommandType::Config:
 			if (cmd.config_key == "blur")
@@ -107,6 +152,8 @@ int main(int argc, char** argv) {
 		if (keypress == key_pause) {
 			paused = !paused;
 			events.write_event(paused ? "paused" : "resumed");
+			if (paused)
+				write_pause_info(command_dir, last_params, output_width, output_height);
 		} else if (keypress == key_debug) {
 			debug = !debug;
 		} else if (keypress == key_escape || keypress == key_quit) {
