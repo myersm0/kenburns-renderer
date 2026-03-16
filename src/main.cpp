@@ -1,4 +1,3 @@
-// main.cpp
 #include <cstdlib>
 #include <chrono>
 #include <sys/stat.h>

@@ -5,8 +5,19 @@
 #include <cstdio>
 #include <sys/stat.h>
 #include "slideshow.h"
+
+#ifdef __APPLE__
 #include <sys/event.h>
+#endif
 #include <fcntl.h>
+
+// JSON subset accepted by this parser:
+//   - flat objects only (no nesting)
+//   - string values: "key":"value" or "key": "value"
+//   - numeric values: "key":1.5 or "key": 1.5
+//   - no escaped quotes within strings
+//   - "points" is a semicolon-separated string: "0.3,0.4;0.7,0.6"
+// This is sufficient because both producer and consumer are under our control.
 
 enum class CommandType {
 	None, Load, Transition, Swap, Cancel, Quit, Config
@@ -23,15 +34,132 @@ struct Command {
 	double config_value = 0.0;
 };
 
+namespace parse {
+
+inline std::string get_string(const std::string& content, const std::string& key) {
+	for (auto& sep : {"\":\"", "\": \""}) {
+		std::string search = "\"" + key + sep;
+		auto pos = content.find(search);
+		if (pos != std::string::npos) {
+			pos += search.size();
+			auto end = content.find("\"", pos);
+			if (end != std::string::npos)
+				return content.substr(pos, end - pos);
+		}
+	}
+	return "";
+}
+
+inline double get_double(const std::string& content, const std::string& key, double fallback = 0.0) {
+	for (auto& sep : {"\":", "\": "}) {
+		std::string search = "\"" + key + sep;
+		auto pos = content.find(search);
+		if (pos != std::string::npos) {
+			pos += search.size();
+			while (pos < content.size() && content[pos] == ' ') pos++;
+			try {
+				return std::stod(content.substr(pos));
+			} catch (...) {
+				return fallback;
+			}
+		}
+	}
+	return fallback;
+}
+
+inline FocusMethod focus_method(const std::string& s) {
+	if (s == "random") return FocusMethod::Random;
+	if (s == "specific") return FocusMethod::Specific;
+	if (s == "union") return FocusMethod::Union;
+	return FocusMethod::Center;
+}
+
+inline ZoomMethod zoom_method(const std::string& s) {
+	if (s == "fixed") return ZoomMethod::Fixed;
+	if (s == "fit") return ZoomMethod::Fit;
+	if (s == "fit_points") return ZoomMethod::FitPoints;
+	return ZoomMethod::Random;
+}
+
+inline MotionStyle motion_style(const std::string& s) {
+	if (s == "zoom_in") return MotionStyle::ZoomIn;
+	if (s == "zoom_out") return MotionStyle::ZoomOut;
+	if (s == "drift") return MotionStyle::Drift;
+	if (s == "pan_to") return MotionStyle::PanTo;
+	return MotionStyle::Static;
+}
+
+inline std::vector<FocalPoint> points(const std::string& content) {
+	std::vector<FocalPoint> result;
+	std::string raw = get_string(content, "points");
+	if (raw.empty()) return result;
+
+	std::istringstream stream(raw);
+	std::string pair;
+	while (std::getline(stream, pair, ';')) {
+		auto comma = pair.find(',');
+		if (comma != std::string::npos) {
+			try {
+				double px = std::stod(pair.substr(0, comma));
+				double py = std::stod(pair.substr(comma + 1));
+				result.push_back({px, py});
+			} catch (...) {}
+		}
+	}
+	return result;
+}
+
+inline Command load(const std::string& content) {
+	Command cmd;
+	cmd.type = CommandType::Load;
+	cmd.path = get_string(content, "path");
+
+	std::string focus = get_string(content, "focus");
+	if (!focus.empty()) {
+		cmd.has_style = true;
+		cmd.style.focus = focus_method(focus);
+		cmd.style.zoom = zoom_method(get_string(content, "zoom"));
+		cmd.style.motion = motion_style(get_string(content, "motion"));
+
+		double zm = get_double(content, "zoom_min");
+		double zx = get_double(content, "zoom_max");
+		if (zm > 0.0) cmd.style.zoom_min = zm;
+		if (zx > 0.0) cmd.style.zoom_max = zx;
+
+		double drift = get_double(content, "drift_magnitude");
+		if (drift > 0.0) cmd.style.drift_magnitude = drift;
+
+		double pad = get_double(content, "padding");
+		if (pad > 0.0) cmd.style.padding = pad;
+
+		cmd.style.points = points(content);
+	} else {
+		cmd.has_raw_keyframe = true;
+		cmd.kf.start_x = get_double(content, "start_x");
+		cmd.kf.start_y = get_double(content, "start_y");
+		cmd.kf.start_zoom = get_double(content, "start_zoom");
+		cmd.kf.end_x = get_double(content, "end_x");
+		cmd.kf.end_y = get_double(content, "end_y");
+		cmd.kf.end_zoom = get_double(content, "end_zoom");
+	}
+
+	return cmd;
+}
+
+} // namespace parse
+
 class CommandReader {
 	std::string command_path;
+#ifdef __APPLE__
 	int kq;
 	int dir_fd;
+#endif
 
 public:
 	CommandReader(const std::string& dir) {
 		command_path = dir + "/command.json";
 
+#ifdef __APPLE__
 		kq = kqueue();
 		dir_fd = open(dir.c_str(), O_RDONLY);
 
@@ -40,16 +168,20 @@ public:
 			EV_ADD | EV_ENABLE | EV_CLEAR,
 			NOTE_WRITE, 0, nullptr);
 		kevent(kq, &change, 1, nullptr, 0, nullptr);
+#endif
 	}
 
 	~CommandReader() {
+#ifdef __APPLE__
 		if (dir_fd >= 0) close(dir_fd);
 		if (kq >= 0) close(kq);
+#endif
 	}
 
 	Command poll() {
 		Command cmd;
 
+#ifdef __APPLE__
 		struct kevent event;
 		struct timespec timeout = {0, 0};
 		int n = kevent(kq, nullptr, 0, &event, 1, &timeout);
@@ -59,6 +191,11 @@ public:
 			if (stat(command_path.c_str(), &st) != 0)
 				return cmd;
 		}
+#else
+		struct stat st;
+		if (stat(command_path.c_str(), &st) != 0)
+			return cmd;
+#endif
 
 		std::ifstream file(command_path);
 		if (!file.is_open()) return cmd;
@@ -70,93 +207,10 @@ public:
 
 		if (content.empty()) return cmd;
 
-		auto get_string = [&](const std::string& key) -> std::string {
-			std::string search = "\"" + key + "\":\"";
-			auto pos = content.find(search);
-			if (pos == std::string::npos) {
-				search = "\"" + key + "\": \"";
-				pos = content.find(search);
-			}
-			if (pos == std::string::npos) return "";
-			pos += search.size();
-			auto end = content.find("\"", pos);
-			return content.substr(pos, end - pos);
-		};
-
-		auto get_double = [&](const std::string& key) -> double {
-			std::string search = "\"" + key + "\":";
-			auto pos = content.find(search);
-			if (pos == std::string::npos) {
-				search = "\"" + key + "\": ";
-				pos = content.find(search);
-			}
-			if (pos == std::string::npos) return 0.0;
-			pos += search.size();
-			while (pos < content.size() && content[pos] == ' ') pos++;
-			return std::stod(content.substr(pos));
-		};
-
-		std::string type = get_string("command");
+		std::string type = parse::get_string(content, "command");
 
 		if (type == "load") {
-			cmd.type = CommandType::Load;
-			cmd.path = get_string("path");
-
-			std::string focus = get_string("focus");
-			if (!focus.empty()) {
-				cmd.has_style = true;
-
-				if (focus == "center") cmd.style.focus = FocusMethod::Center;
-				else if (focus == "random") cmd.style.focus = FocusMethod::Random;
-				else if (focus == "specific") cmd.style.focus = FocusMethod::Specific;
-				else if (focus == "union") cmd.style.focus = FocusMethod::Union;
-
-				std::string zoom_str = get_string("zoom");
-				if (zoom_str == "fixed") cmd.style.zoom = ZoomMethod::Fixed;
-				else if (zoom_str == "random") cmd.style.zoom = ZoomMethod::Random;
-				else if (zoom_str == "fit") cmd.style.zoom = ZoomMethod::Fit;
-				else if (zoom_str == "fit_points") cmd.style.zoom = ZoomMethod::FitPoints;
-
-				std::string motion_str = get_string("motion");
-				if (motion_str == "static") cmd.style.motion = MotionStyle::Static;
-				else if (motion_str == "zoom_in") cmd.style.motion = MotionStyle::ZoomIn;
-				else if (motion_str == "zoom_out") cmd.style.motion = MotionStyle::ZoomOut;
-				else if (motion_str == "drift") cmd.style.motion = MotionStyle::Drift;
-				else if (motion_str == "pan_to") cmd.style.motion = MotionStyle::PanTo;
-
-				double zm = get_double("zoom_min");
-				double zx = get_double("zoom_max");
-				if (zm > 0.0) cmd.style.zoom_min = zm;
-				if (zx > 0.0) cmd.style.zoom_max = zx;
-
-				double drift = get_double("drift_magnitude");
-				if (drift > 0.0) cmd.style.drift_magnitude = drift;
-
-				double pad = get_double("padding");
-				if (pad > 0.0) cmd.style.padding = pad;
-
-				std::string points_str = get_string("points");
-				if (!points_str.empty()) {
-					std::istringstream pss(points_str);
-					std::string pair;
-					while (std::getline(pss, pair, ';')) {
-						auto comma = pair.find(',');
-						if (comma != std::string::npos) {
-							double px = std::stod(pair.substr(0, comma));
-							double py = std::stod(pair.substr(comma + 1));
-							cmd.style.points.push_back({px, py});
-						}
-					}
-				}
-			} else {
-				cmd.has_raw_keyframe = true;
-				cmd.kf.start_x = get_double("start_x");
-				cmd.kf.start_y = get_double("start_y");
-				cmd.kf.start_zoom = get_double("start_zoom");
-				cmd.kf.end_x = get_double("end_x");
-				cmd.kf.end_y = get_double("end_y");
-				cmd.kf.end_zoom = get_double("end_zoom");
-			}
+			cmd = parse::load(content);
 		} else if (type == "transition") {
 			cmd.type = CommandType::Transition;
 		} else if (type == "swap") {
@@ -167,8 +221,8 @@ public:
 			cmd.type = CommandType::Quit;
 		} else if (type == "config") {
 			cmd.type = CommandType::Config;
-			cmd.config_key = get_string("key");
-			cmd.config_value = get_double("value");
+			cmd.config_key = parse::get_string(content, "key");
+			cmd.config_value = parse::get_double(content, "value");
 		}
 
 		return cmd;

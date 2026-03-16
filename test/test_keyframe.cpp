@@ -1,8 +1,6 @@
 #include <cstdio>
 #include <cmath>
 #include <cassert>
-#include <cstdlib>
-#include <ctime>
 
 // need Keyframe definition before keyframe_builder.h
 struct Keyframe {
@@ -10,7 +8,7 @@ struct Keyframe {
 	double end_x, end_y, end_zoom;
 };
 
-#include "keyframe_builder.h"
+#include "../src/keyframe_builder.h"
 
 int tests_run = 0;
 int tests_passed = 0;
@@ -304,8 +302,6 @@ void test_build_union_pan() {
 // ---- main ----
 
 int main() {
-	srand((unsigned)time(nullptr));
-
 	printf("clamp_center:\n");
 	test_clamp_center_stays_centered();
 	test_clamp_center_edge_clamped();

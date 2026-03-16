@@ -1,7 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
+#include <random>
 #include <vector>
 
 // re-uses Keyframe from slideshow.h
@@ -31,8 +31,14 @@ struct KeyframeParams {
 
 // ---- helpers ----
 
+inline std::mt19937& rng() {
+	thread_local std::mt19937 engine{std::random_device{}()};
+	return engine;
+}
+
 inline double random_double(double lo, double hi) {
-	return lo + (hi - lo) * ((double)rand() / RAND_MAX);
+	std::uniform_real_distribution<double> dist(lo, hi);
+	return dist(rng());
 }
 
 inline CenterPair clamp_center(
