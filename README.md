@@ -47,8 +47,29 @@ This cycles through three images with different motion styles (drift with curved
 | `--hold`    | 5.0     | Seconds to hold each image before transitioning  |
 | `--fade`    | 3.0     | Crossfade duration in seconds                    |
 | `--timeout` | 300.0   | Seconds of inactivity before auto-quit           |
+| `--output`  |         | Write frames instead of displaying (see below)   |
 
 The program opens a fullscreen OpenCV window and enters its render loop. It reads commands from `<command_dir>/command.json` and writes status to `<command_dir>/status.json`.
+
+## Headless output
+
+With `--output`, kbr skips the window and writes frames directly. The controller drives it via IPC as usual and sends `quit` when done.
+
+**Pipe to ffmpeg** (raw BGR frames to stdout):
+```bash
+./kbr /tmp/kbr_cmd --output - --fps 30 | \
+  ffmpeg -f rawvideo -pix_fmt bgr24 -s 1920x1080 -r 30 -i - \
+  -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+**Numbered PNGs** (for debugging or frame-level tools):
+```bash
+./kbr /tmp/kbr_cmd --output /tmp/frames/
+```
+
+Frames are written as `frame_000001.png`, `frame_000002.png`, etc.
+
+In headless mode there is no keyboard input — all control is via the IPC protocol. Frames are rendered as fast as possible with no frame-rate pacing. The status file and idle timeout still work normally.
 
 ## Keyboard controls
 
@@ -196,9 +217,13 @@ Written on state changes to `<command_dir>/status.json` (atomic rename):
     "phase": "holding",
     "preload_ready": true,
     "fade_complete": false,
-    "paused": false
+    "paused": false,
+    "source_w": 2400,
+    "source_h": 1600
 }
 ```
+
+`source_w` and `source_h` are the pixel dimensions of the currently displayed image. They are 0 before any image is loaded. This is useful for controllers that run external analysis and need to convert pixel coordinates to the normalized [0,1] coordinates that the `points` field expects: `point_x = pixel_x / source_w`.
 
 ### Keypresses (kbr → controller)
 
