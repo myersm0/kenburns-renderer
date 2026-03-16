@@ -2,10 +2,12 @@
 #include <cmath>
 #include <cassert>
 
-// need Keyframe definition before keyframe_builder.h
 struct Keyframe {
 	double start_x, start_y, start_zoom;
 	double end_x, end_y, end_zoom;
+	double ctrl1_x, ctrl1_y;
+	double ctrl2_x, ctrl2_y;
+	bool curved = false;
 };
 
 #include "../src/keyframe_builder.h"
@@ -299,6 +301,72 @@ void test_build_union_pan() {
 	else FAIL("not panning")
 }
 
+// ---- curves ----
+
+void test_drift_is_curved() {
+	TEST("curve: drift produces curved keyframes")
+	int curved_count = 0;
+	for (int i = 0; i < 50; i++) {
+		auto kf = apply_motion(MotionStyle::Drift,
+			{0.5, 0.5}, 1.0, 0.15, {},
+			1000, 1000, 1920, 1080);
+		if (kf.curved) curved_count++;
+	}
+	if (curved_count == 50) PASS
+	else FAIL("not all curved")
+}
+
+void test_pan_to_is_curved() {
+	TEST("curve: pan_to produces curved keyframe")
+	std::vector<FocalPoint> pts = {{0.3, 0.3}, {0.7, 0.7}};
+	auto kf = apply_motion(MotionStyle::PanTo,
+		{0.5, 0.5}, 2.0, 0.0, pts,
+		1000, 1000, 1920, 1080);
+	if (kf.curved) PASS
+	else FAIL("not curved")
+}
+
+void test_pan_to_s_curve() {
+	TEST("curve: pan_to control points on opposite sides")
+	std::vector<FocalPoint> pts = {{0.3, 0.5}, {0.7, 0.5}};
+	bool saw_s = false;
+	for (int i = 0; i < 50; i++) {
+		auto kf = apply_motion(MotionStyle::PanTo,
+			{0.5, 0.5}, 2.0, 0.0, pts,
+			1000, 1000, 1920, 1080);
+		// horizontal pan: ctrl1 and ctrl2 should have y offsets in opposite directions
+		double mid_y = 0.5;
+		double c1_off = kf.ctrl1_y - mid_y;
+		double c2_off = kf.ctrl2_y - mid_y;
+		if (c1_off * c2_off < 0) { saw_s = true; break; }
+	}
+	if (saw_s) PASS
+	else FAIL("no S-curve detected")
+}
+
+void test_static_not_curved() {
+	TEST("curve: static is not curved")
+	auto kf = apply_motion(MotionStyle::Static,
+		{0.5, 0.5}, 1.0, 0.0, {},
+		1000, 1000, 1920, 1080);
+	if (!kf.curved) PASS
+	else FAIL("should not be curved")
+}
+
+void test_curve_control_points_clamped() {
+	TEST("curve: control points get clamped")
+	Keyframe kf;
+	kf.start_x = 0.5; kf.start_y = 0.5; kf.start_zoom = 2.0;
+	kf.end_x = 0.5; kf.end_y = 0.5; kf.end_zoom = 2.0;
+	kf.ctrl1_x = -0.5; kf.ctrl1_y = -0.5;
+	kf.ctrl2_x = 1.5; kf.ctrl2_y = 1.5;
+	kf.curved = true;
+	auto clamped = clamp_keyframe(kf, 1000, 1000, 1920, 1080);
+	if (clamped.ctrl1_x > 0.0 && clamped.ctrl1_y > 0.0
+		&& clamped.ctrl2_x < 1.0 && clamped.ctrl2_y < 1.0) PASS
+	else FAIL("control points not clamped")
+}
+
 // ---- main ----
 
 int main() {
@@ -338,6 +406,13 @@ int main() {
 	test_build_union_fitpoints_static();
 	test_build_result_always_clamped();
 	test_build_union_pan();
+
+	printf("\ncurves:\n");
+	test_drift_is_curved();
+	test_pan_to_is_curved();
+	test_pan_to_s_curve();
+	test_static_not_curved();
+	test_curve_control_points_clamped();
 
 	printf("\n%d/%d passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
