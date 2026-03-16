@@ -169,10 +169,8 @@ public:
 		, affine(2, 3, CV_64F)
 	{}
 
-	int render(const char* window_name, RenderParams& params,
-		double blur_strength, int wait_ms, bool debug = false
-	) {
-		if (!params.valid) return cv::waitKey(wait_ms);
+	cv::Mat* composite(RenderParams& params, double blur_strength, bool debug = false) {
+		if (!params.valid) return nullptr;
 
 		CropState sa = interpolate_crop(
 			params.a_t, params.kf_a,
@@ -226,6 +224,14 @@ public:
 		if (debug)
 			draw_debug(*display, params, sa);
 
+		return display;
+	}
+
+	int render(const char* window_name, RenderParams& params,
+		double blur_strength, int wait_ms, bool debug = false
+	) {
+		cv::Mat* display = composite(params, blur_strength, debug);
+		if (!display) return cv::waitKey(wait_ms);
 		cv::imshow(window_name, *display);
 		return cv::waitKey(wait_ms);
 	}

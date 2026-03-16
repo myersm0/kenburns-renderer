@@ -249,7 +249,8 @@ public:
 	}
 
 	void write(const std::string& phase, bool preload_ready,
-		bool fade_complete, bool paused
+		bool fade_complete, bool paused,
+		int source_w = 0, int source_h = 0
 	) {
 		std::ofstream file(tmp_path);
 		if (!file.is_open()) return;
@@ -258,7 +259,9 @@ public:
 			<< "\"phase\":\"" << phase << "\","
 			<< "\"preload_ready\":" << (preload_ready ? "true" : "false") << ","
 			<< "\"fade_complete\":" << (fade_complete ? "true" : "false") << ","
-			<< "\"paused\":" << (paused ? "true" : "false")
+			<< "\"paused\":" << (paused ? "true" : "false") << ","
+			<< "\"source_w\":" << source_w << ","
+			<< "\"source_h\":" << source_h
 			<< "}" << std::endl;
 
 		file.close();

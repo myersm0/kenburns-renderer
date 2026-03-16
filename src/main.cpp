@@ -64,6 +64,9 @@ int main(int argc, char** argv) {
 	if (argc < 2) {
 		printf("usage: kbr <command_dir> [options]\n");
 		printf("  --width W --height H --fps F --hold S --fade S --timeout S\n");
+		printf("  --output PATH   write frames instead of displaying\n");
+		printf("                  use - for raw BGR to stdout (pipe to ffmpeg)\n");
+		printf("                  use a directory path for numbered PNGs\n");
 		return 1;
 	}
 
@@ -76,6 +79,7 @@ int main(int argc, char** argv) {
 	double idle_timeout_seconds = 300.0;
 	int output_width = 1920;
 	int output_height = 1080;
+	std::string output_path;
 
 	for (int i = 2; i < argc - 1; i += 2) {
 		std::string flag = argv[i];
@@ -85,14 +89,27 @@ int main(int argc, char** argv) {
 		else if (flag == "--hold") hold_seconds = atof(argv[i + 1]);
 		else if (flag == "--fade") fade_seconds = atof(argv[i + 1]);
 		else if (flag == "--timeout") idle_timeout_seconds = atof(argv[i + 1]);
+		else if (flag == "--output") output_path = argv[i + 1];
 	}
 
+	bool headless = !output_path.empty();
+	bool pipe_output = (output_path == "-");
 	int wait_ms = 1000 / fps;
 
-	const char* window_name = "kbr";
-	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
-	cv::moveWindow(window_name, 0, 0);
-	cv::setWindowProperty(window_name, cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
+	if (!headless) {
+		const char* window_name = "kbr";
+		cv::namedWindow(window_name, cv::WINDOW_NORMAL);
+		cv::moveWindow(window_name, 0, 0);
+		cv::setWindowProperty(window_name, cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
+	}
+
+	if (headless && !pipe_output)
+		mkdir(output_path.c_str(), 0755);
+
+#ifdef _WIN32
+	if (pipe_output)
+		_setmode(_fileno(stdout), _O_BINARY);
+#endif
 
 	SlideshowState state(fps, hold_seconds, fade_seconds);
 	state.output_width = output_width;
@@ -112,6 +129,7 @@ int main(int argc, char** argv) {
 	bool paused = false;
 	bool debug = false;
 	RenderParams last_params;
+	int frame_number = 0;
 
 	SlideshowPhase prev_phase = SlideshowPhase::Idle;
 	bool prev_preload = false;
@@ -127,7 +145,8 @@ int main(int argc, char** argv) {
 		case SlideshowPhase::Transitioning: phase_str = "transitioning"; break;
 		}
 		status_writer.write(phase_str, state.preload_ready(),
-			state.fade_complete(), paused);
+			state.fade_complete(), paused,
+			last_params.debug_source_w, last_params.debug_source_h);
 	};
 
 	write_status();
@@ -172,20 +191,38 @@ int main(int argc, char** argv) {
 
 		if (!paused)
 			last_params = state.tick();
-		int keypress = renderer.render(
-			window_name, last_params, state.blur_strength, wait_ms, debug);
 
-		if (keypress == key_pause) {
-			paused = !paused;
-			status_dirty = true;
-			if (paused)
-				write_pause_info(command_dir, last_params, output_width, output_height);
-		} else if (keypress == key_debug) {
-			debug = !debug;
-		} else if (keypress == key_escape || keypress == key_quit) {
-			_exit(0);
-		} else if (keypress >= 0) {
-			key_writer.write(keypress);
+		if (headless) {
+			cv::Mat* frame = renderer.composite(last_params, state.blur_strength);
+			if (frame) {
+				if (pipe_output) {
+					fwrite(frame->data, 1,
+						frame->cols * frame->rows * frame->channels(), stdout);
+					fflush(stdout);
+				} else {
+					char filename[256];
+					snprintf(filename, sizeof(filename),
+						"%s/frame_%06d.png", output_path.c_str(), frame_number);
+					cv::imwrite(filename, *frame);
+				}
+				frame_number++;
+			}
+		} else {
+			int keypress = renderer.render(
+				"kbr", last_params, state.blur_strength, wait_ms, debug);
+
+			if (keypress == key_pause) {
+				paused = !paused;
+				status_dirty = true;
+				if (paused)
+					write_pause_info(command_dir, last_params, output_width, output_height);
+			} else if (keypress == key_debug) {
+				debug = !debug;
+			} else if (keypress == key_escape || keypress == key_quit) {
+				_exit(0);
+			} else if (keypress >= 0) {
+				key_writer.write(keypress);
+			}
 		}
 
 		// detect state changes and write status
