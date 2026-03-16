@@ -307,3 +307,6 @@ kenburns-renderer/
 ## Process lifecycle
 
 The program calls `_exit(0)` on ESC press, `q` press, quit command, or idle timeout. This bypasses C++ destructors and OpenCV cleanup, which is deliberate — the Cocoa backend on macOS can hang during teardown. The OS reclaims all resources. The controlling process should detect the child's exit via `process_running()` or equivalent.
+
+# License
+MIT
