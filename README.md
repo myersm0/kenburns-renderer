@@ -1,13 +1,13 @@
-# Ken Burns Slideshow — C++ Renderer
+# kenburns-renderer
 
-A standalone C++ program that renders a Ken Burns effect slideshow with mipmap-based anti-aliasing, directional motion blur, smooth crossfade transitions, and background image preloading. Designed to be controlled by an external process (typically Julia) via file-based IPC.
+A standalone C++ Ken Burns effect renderer with mipmap-based anti-aliasing, Bézier curved motion paths, directional motion blur, smooth crossfade transitions, and background image preloading. Designed to be controlled by an external process via file-based IPC.
 
 ## Building
 
-Requires OpenCV 4.x with highgui, imgproc, and imgcodecs.
+Requires OpenCV 4.x with highgui, imgproc, and imgcodecs. C++17.
 
 ```bash
-g++ -o slideshow main.cpp \
+g++ -o kbr src/main.cpp -Isrc \
     -I/path/to/opencv/include/opencv4 \
     -L/path/to/opencv/lib \
     -Wl,-rpath,/path/to/opencv/lib \
@@ -15,13 +15,29 @@ g++ -o slideshow main.cpp \
     -std=c++17 -pthread -O2
 ```
 
+Or with CMake:
+
+```bash
+mkdir build && cd build
+cmake .. && make
+```
+
+## Quick start
+
+Generate some test images and run the demo controller:
+
+```bash
+python demo/generate_images.py
+julia demo/demo.jl
+```
+
+This cycles through three images with different motion styles (drift with curved arc, pan_to with S-curve, zoom_in), crossfading between them. Press `?` in the renderer window to see the debug overlay with the Bézier curve visualization.
+
 ## Usage
 
 ```bash
-./slideshow <command_dir> [options]
+./kbr <command_dir> [options]
 ```
-
-**Options:**
 
 | Flag        | Default | Description                                      |
 |-------------|---------|--------------------------------------------------|
@@ -32,17 +48,17 @@ g++ -o slideshow main.cpp \
 | `--fade`    | 3.0     | Crossfade duration in seconds                    |
 | `--timeout` | 300.0   | Seconds of inactivity before auto-quit           |
 
-The program opens a fullscreen OpenCV window and enters its render loop. It reads commands from `<command_dir>/command.json` and writes status to `<command_dir>/status.json` and events to `<command_dir>/events.log`.
+The program opens a fullscreen OpenCV window and enters its render loop. It reads commands from `<command_dir>/command.json` and writes status to `<command_dir>/status.json`.
 
 ## Keyboard controls
 
-| Key        | Action                                          |
-|------------|-------------------------------------------------|
+| Key        | Action                                            |
+|------------|---------------------------------------------------|
 | Spacebar   | Toggle pause (freezes animation on current frame) |
-| `?`        | Toggle debug overlay                            |
-| `q` or ESC | Quit immediately                                |
+| `?`        | Toggle debug overlay                              |
+| `q` or ESC | Quit immediately                                 |
 
-Spacebar, `?`, `q`, and ESC are consumed by the renderer and not forwarded to the controller. All other keypresses are written to the event log for the controller to handle.
+Spacebar, `?`, `q`, and ESC are consumed by the renderer. All other keypresses are written to `<command_dir>/keys.log` for the controller to handle.
 
 ## Debug overlay
 
@@ -50,50 +66,62 @@ Press `?` during playback to toggle the debug overlay. Combine with spacebar pau
 
 | Element                | Color        | Meaning                                              |
 |------------------------|--------------|------------------------------------------------------|
-| Thin rectangle         | Gray         | Image boundary — the full extent of the source image in output space. Visible when the crop extends beyond the image (zoom < 1.0 or aspect mismatch). |
-| Filled circles         | Red / white  | Focal points — the normalized coordinates passed via the `points` field in the load command. These are the regions of interest the keyframe builder was asked to frame. |
-| Rectangle around dots  | Yellow       | Bounding box of focal points (shown when 2+ points are present). This is the region that `fit_points` zoom tries to contain. |
-| Cross marker           | Green        | Start position — where the crop center begins at the start of the animation (keyframe `start_x`, `start_y`). |
-| Tilted cross marker    | Blue         | End position — where the crop center will be at the end of the animation (keyframe `end_x`, `end_y`). |
-| Line between markers   | Gray         | Motion path — the trajectory from start to end position. |
-| Crosshair at center    | White        | Screen center — the current crop center is always here by definition. As the animation progresses, the start marker drifts one way and the end marker drifts the other. |
+| Thin rectangle         | Gray         | Image boundary in output space. Visible when the crop extends beyond the image. |
+| Filled circles         | Red / white  | Focal points from the `points` field in the load command. |
+| Rectangle around dots  | Yellow       | Bounding box of focal points (when 2+ present). |
+| Cross marker           | Green        | Start position of the animation. |
+| Tilted cross marker    | Blue         | End position of the animation. |
+| Curve or line          | Gray         | Motion path — Bézier curve for drift/pan_to, straight line for others. |
+| Diamond markers        | Cyan         | Bézier control points (only shown for curved paths). |
+| Crosshair at center    | White        | Screen center (current crop center). |
 
-**Text readout** (top-left corner):
-
-- **zoom: 1.23  t: 0.45** — Current interpolated zoom level and animation progress (0.0 = start, 1.0 = end). Zoom follows the camera convention: 1.0 = entire image visible (fit to output aspect ratio), 2.0 = half the linear extent visible (2x magnification). Values below 1.0 mean the crop exceeds the image and black borders appear.
-- **kf: (0.50,0.50,1.10) → (0.45,0.48,1.30)** — The raw keyframe: (start_x, start_y, start_zoom) → (end_x, end_y, end_zoom). Coordinates are normalized [0,1] relative to the source image. These are the values computed by the keyframe builder (or passed directly in a raw keyframe command).
-- **src: 4000x3000  points: 2** — Source image dimensions and number of focal points.
+**Text readout** (top-left corner): current zoom and animation progress, the raw keyframe coordinates, and source image dimensions.
 
 ## Zoom semantics
 
-Zoom uses the camera/film convention:
+Zoom uses the camera/film convention. 1.0 means the entire image is visible within the output frame (with letterboxing/pillarboxing if aspect ratios differ). 2.0 means half the linear extent is visible (2× magnification). Values below 1.0 show the full image with increasing black borders.
 
-- **zoom = 1.0** — The entire image is visible within the output frame. If the image aspect ratio differs from the output, black bars (letterboxing or pillarboxing) fill the gap. This is a "fit" behavior.
-- **zoom = 2.0** — The crop covers half the linear extent of the image in each direction (1/4 the area). The image appears twice as close.
-- **zoom < 1.0** — The crop exceeds the image. The full image is visible with increasing black borders.
+The reference frame is the largest output-aspect-ratio rectangle containing the entire source image, making zoom values portable across resolutions.
 
-The reference frame is the largest output-aspect-ratio rectangle that contains the entire source image. This makes zoom values portable across images of different resolutions — zoom 1.2 means the same visual tightness regardless of whether the source is 800x600 or 8000x6000.
+## Curved motion paths
 
-For quality-sensitive applications, note that high zoom on low-resolution images produces upscaling artifacts. The crossover point where source pixels map 1:1 to output pixels varies per image and can be computed as `max(img_w / (out_w / out_aspect), img_h) / out_h` where `out_aspect = out_w / out_h`. Zoom values above this threshold are downsampling (sharp), below it are upscaling (soft).
+The `drift` and `pan_to` motion styles produce cubic Bézier curves rather than straight lines. This gives the camera a natural, cinematographic feel — gentle arcs for drift, S-curves for pan_to.
+
+A Bézier path is defined by four points in normalized image coordinates: the start and end positions (from the keyframe) plus two control points that shape the curve. When control points coincide with the endpoints (or when `curved` is false), the path is just a straight line.
+
+For raw keyframe commands, you can specify control points explicitly:
+
+```json
+{
+    "command": "load",
+    "path": "/path/to/image.jpg",
+    "start_x": 0.3, "start_y": 0.3, "start_zoom": 1.5,
+    "end_x": 0.7, "end_y": 0.7, "end_zoom": 1.5,
+    "ctrl1_x": 0.2, "ctrl1_y": 0.6,
+    "ctrl2_x": 0.8, "ctrl2_y": 0.4
+}
+```
+
+If control points are omitted, a straight line is used.
 
 ## Architecture
 
-Five source files, one compilation unit:
+Five source files in `src/`, one compilation unit:
 
-| File                 | Purpose                                                |
-|----------------------|--------------------------------------------------------|
-| `slideshow.h`        | Types, mipmap builder, state machine, preloader thread |
-| `keyframe_builder.h` | Focal point, zoom, and motion computation              |
+| File                 | Purpose                                                    |
+|----------------------|------------------------------------------------------------|
+| `slideshow.h`        | Types, Bézier interpolation, mipmap builder, state machine, preloader thread |
+| `keyframe_builder.h` | Focal point, zoom, motion, and curve computation           |
 | `renderer.h`         | Pyramid-aware rendering with motion blur and debug overlay |
-| `commands.h`         | File-based command/status/event I/O with kqueue        |
-| `main.cpp`           | Main loop wiring everything together                   |
+| `commands.h`         | File-based command/status/key I/O                          |
+| `main.cpp`           | Main loop wiring everything together                       |
 
 ### Render pipeline
 
 Each frame follows this path:
 
-1. State machine `tick()` produces a `RenderParams` struct describing what to draw (which pyramids, interpolation parameter, blend alpha, debug points, etc.)
-2. Renderer computes a `CropState` via `interpolate_crop` with smoothstep easing
+1. State machine `tick()` produces a `RenderParams` struct describing what to draw
+2. Renderer computes a `CropState` via `interpolate_crop` with smoothstep easing and Bézier path evaluation
 3. Selects the appropriate mipmap level (`log2` of downsample ratio) to avoid aliasing
 4. Builds an affine matrix mapping output pixels back to the pyramid level
 5. `warpAffine` with `BORDER_CONSTANT` fills black for any out-of-bounds regions
@@ -103,25 +131,21 @@ Each frame follows this path:
 
 ### Mipmap pyramid
 
-Each image is decomposed into a Gaussian pyramid via `pyrDown`. Per frame, the renderer selects the level whose resolution is closest to 1:1 with the output crop, eliminating aliasing artifacts on fine detail (foliage, hair, fabric textures). Memory overhead is 1.33x the source image. The preloader thread builds the next image's pyramid in the background during the hold phase.
+Each image is decomposed into a Gaussian pyramid via `pyrDown`. Per frame, the renderer selects the level whose resolution is closest to 1:1 with the output crop, eliminating aliasing artifacts on fine detail (foliage, hair, fabric textures). Memory overhead is 1.33× the source image. The preloader thread builds the next image's pyramid in the background during the hold phase.
 
 ### State machine
 
-`SlideshowState` manages three phases:
-
-- **Idle** — waiting for the first image
-- **Holding** — displaying an image with Ken Burns animation
-- **Transitioning** — crossfading between current and next image
-
-Transitions are explicitly triggered via the `transition` command. The state machine never auto-advances — the controlling process decides timing.
+`SlideshowState` manages three phases: Idle (waiting for the first image), Holding (displaying an image with Ken Burns animation), and Transitioning (crossfading between current and next image). Transitions are explicitly triggered via the `transition` command. The state machine never auto-advances — the controlling process decides timing.
 
 ## IPC Protocol
 
-### Commands (controller → slideshow)
+### Commands (controller → kbr)
 
-Write JSON to `<command_dir>/command.json` (via atomic rename from `.tmp`). The slideshow deletes the file after reading.
+Write JSON to `<command_dir>/command.json` via atomic rename from a `.tmp` file. The renderer deletes the file after reading.
 
-**Load with style (C++ computes keyframe):**
+The JSON parser accepts flat objects with string and numeric values, no nesting. No escaped quotes within strings. This is sufficient because both producer and consumer are under your control.
+
+**Load with style (kbr computes keyframe):**
 
 ```json
 {
@@ -149,50 +173,40 @@ Write JSON to `<command_dir>/command.json` (via atomic rename from `.tmp`). The 
 }
 ```
 
+Optionally include `ctrl1_x`, `ctrl1_y`, `ctrl2_x`, `ctrl2_y` for a curved path.
+
 **Other commands:**
 
 ```json
 {"command": "transition"}
-{"command": "skip"}
+{"command": "swap"}
+{"command": "cancel"}
 {"command": "quit"}
 {"command": "config", "key": "blur", "value": 0.3}
 ```
 
-Config keys: `blur` (motion blur strength), `hold` (hold duration in seconds), `fade` (fade duration in seconds).
+`transition` starts a crossfade to the preloaded image. `swap` immediately replaces the current image (either completing a transition or cutting without a fade). `cancel` aborts a transition in progress and returns to holding. Config keys: `blur` (motion blur strength), `hold` (hold duration in seconds), `fade` (fade duration in seconds).
 
-### Status (slideshow → controller)
+### Status (kbr → controller)
 
-Written every frame to `<command_dir>/status.json` (atomic rename). Useful for monitoring; the controller does not depend on this for control flow.
+Written on state changes to `<command_dir>/status.json` (atomic rename):
 
 ```json
 {
     "phase": "holding",
-    "image": "/path/to/current.jpg",
-    "last_key": -1,
-    "preload_ready": true
+    "preload_ready": true,
+    "fade_complete": false,
+    "paused": false
 }
 ```
 
-### Events (slideshow → controller)
+### Keypresses (kbr → controller)
 
-Appended to `<command_dir>/events.log`. The controller tracks its read position and consumes new lines. Events are edge-triggered — they fire once per state change.
-
-| Event                  | Meaning                                |
-|------------------------|----------------------------------------|
-| `phase idle`           | Entered idle state                     |
-| `phase holding`        | Entered holding state                  |
-| `phase transitioning`  | Entered transitioning state            |
-| `preload_ready`        | Next image pyramid is built and ready  |
-| `skipped`              | Skip command was processed             |
-| `paused`               | Playback paused via spacebar           |
-| `resumed`              | Playback resumed via spacebar          |
-| `key <code>`           | A non-consumed key was pressed         |
-
-Note: spacebar (pause/resume), `?` (debug toggle), ESC, and `q` (quit) are consumed by the renderer. Only other keypresses generate `key` events for the controller to handle.
+Non-consumed keypresses are appended to `<command_dir>/keys.log`, one keycode per line.
 
 ## Keyframe Builder
 
-When a `load` command includes `focus`/`zoom`/`motion` fields, C++ computes the keyframe after loading the image (so it knows the image dimensions). All coordinates are normalized to [0, 1] relative to image dimensions.
+When a `load` command includes `focus`/`zoom`/`motion` fields, kbr computes the keyframe after loading the image (so it knows the image dimensions). All coordinates are normalized to [0, 1] relative to image dimensions.
 
 ### Focus methods
 
@@ -216,57 +230,55 @@ When a `load` command includes `focus`/`zoom`/`motion` fields, C++ computes the 
 
 | Value      | Behavior                                                |
 |------------|---------------------------------------------------------|
-| `static`   | No movement — still frame                              |
-| `zoom_in`  | Start at 85% zoom, end at 115%                        |
-| `zoom_out` | Start at 115% zoom, end at 85%                        |
-| `drift`    | Random gentle pan and zoom shift (magnitude controlled by `drift_magnitude`) |
-| `pan_to`   | Pan from first point to second point in `points`       |
+| `static`   | No movement — still frame (linear)                     |
+| `zoom_in`  | Start at 85% zoom, end at 115% (linear)               |
+| `zoom_out` | Start at 115% zoom, end at 85% (linear)               |
+| `drift`    | Random gentle pan and zoom shift along a curved arc    |
+| `pan_to`   | S-curve from first point to second point in `points`   |
 
-All keyframes are automatically clamped to avoid unnecessary black borders. When the crop fits inside the image, the center is pushed inward so edges don't exceed bounds. When the crop is larger than the image (low zoom), it centers and lets `BORDER_CONSTANT` fill black.
+`drift` generates a C-shaped arc by offsetting control points perpendicular to the motion direction. `pan_to` generates an S-curve with control points deflected in opposite directions, giving a natural "look at this, now look at that" camera feel. Both compute a minimum zoom that keeps both endpoints visible, so the pan direction is never squashed by clamping.
+
+All keyframes (including control points) are automatically clamped to avoid unnecessary black borders.
 
 ### Extending with new methods
 
-To add a new focus method, zoom method, or motion style:
-
-1. Add the enum value in `keyframe_builder.h` (e.g. `FocusMethod::FaceDetect`)
+1. Add the enum value in `keyframe_builder.h`
 2. Add the corresponding case in `compute_focus`, `compute_zoom`, or `apply_motion`
-3. Add the string mapping in `commands.h` parser (e.g. `if (focus == "face_detect") ...`)
-4. Add a test case in `test_keyframe.cpp`
+3. Add the string mapping in the `parse` namespace in `commands.h`
+4. Add a test case in `test/test_keyframe.cpp`
 5. Rebuild and run `./test_keyframe`
-
-Example — adding a weighted centroid focus method:
-
-```cpp
-// in keyframe_builder.h
-enum class FocusMethod { Center, Random, Specific, Union, WeightedCentroid };
-
-// in compute_focus
-case FocusMethod::WeightedCentroid: {
-    if (points.empty()) return {0.5, 0.5};
-    double sum_x = 0, sum_y = 0;
-    for (auto& p : points) {
-        sum_x += p.x;
-        sum_y += p.y;
-    }
-    return {sum_x / points.size(), sum_y / points.size()};
-}
-
-// in commands.h parser
-else if (focus == "weighted_centroid")
-    cmd.style.focus = FocusMethod::WeightedCentroid;
-```
 
 ## Testing
 
-The keyframe builder has a standalone test binary that doesn't require OpenCV's highgui:
+The keyframe builder has a standalone test binary that doesn't require OpenCV:
 
 ```bash
-g++ -o test_keyframe test_keyframe.cpp -std=c++17 -O2
+g++ -o test_keyframe test/test_keyframe.cpp -Isrc -std=c++17 -O2
 ./test_keyframe
 ```
 
-This exercises clamping, focus computation, zoom calculation, motion styles, and integration through `build_keyframe`. Add tests here before adding new methods.
+This exercises clamping, focus computation, zoom calculation, motion styles, curve generation, and integration through `build_keyframe`.
+
+## Project structure
+
+```
+kenburns-renderer/
+├── CMakeLists.txt
+├── README.md
+├── src/
+│   ├── main.cpp
+│   ├── commands.h
+│   ├── keyframe_builder.h
+│   ├── renderer.h
+│   └── slideshow.h
+├── test/
+│   └── test_keyframe.cpp
+└── demo/
+    ├── demo.jl
+    ├── generate_images.py
+    └── images/           (generated, not committed)
+```
 
 ## Process lifecycle
 
-The program calls `_exit(0)` on ESC press, `q` press, quit command, or idle timeout. This bypasses all C++ destructors and Qt/OpenCV cleanup, which is deliberate — Qt's Cocoa backend on macOS can hang during teardown. The OS reclaims all resources. The controlling process should detect the child's death via `process_running()` or equivalent.
+The program calls `_exit(0)` on ESC press, `q` press, quit command, or idle timeout. This bypasses C++ destructors and OpenCV cleanup, which is deliberate — the Cocoa backend on macOS can hang during teardown. The OS reclaims all resources. The controlling process should detect the child's exit via `process_running()` or equivalent.
