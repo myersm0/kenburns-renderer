@@ -53,7 +53,7 @@ void write_pause_info(
 
 int main(int argc, char** argv) {
 	if (argc < 2) {
-		printf("usage: slideshow <command_dir> [options]\n");
+		printf("usage: kbr <command_dir> [options]\n");
 		printf("  --width W --height H --fps F --hold S --fade S --timeout S\n");
 		return 1;
 	}
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
 
 	int wait_ms = 1000 / fps;
 
-	const char* window_name = "slideshow";
+	const char* window_name = "kenburns-renderer";
 	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
 	cv::moveWindow(window_name, 0, 0);
 	cv::setWindowProperty(window_name, cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);

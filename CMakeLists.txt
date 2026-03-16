@@ -7,15 +7,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui imgcodecs)
 find_package(Threads REQUIRED)
 
-add_executable(slideshow
+add_executable(kbr
 	src/main.cpp
 )
 
-target_include_directories(slideshow PRIVATE
+target_include_directories(kbr PRIVATE
 	src
 )
 
-target_link_libraries(slideshow PRIVATE
+target_link_libraries(kbr PRIVATE
 	${OpenCV_LIBS}
 	Threads::Threads
 )
