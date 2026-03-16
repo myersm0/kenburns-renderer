@@ -218,9 +218,24 @@ inline Keyframe apply_motion(
 		if (points.size() < 2) {
 			kf = {focus.cx, focus.cy, zoom, focus.cx, focus.cy, zoom};
 		} else {
+			double out_aspect = (double)output_width / output_height;
+			double fit_size = std::max(image_width / out_aspect, (double)image_height);
+
+			double min_zoom = zoom;
+			for (auto& p : {points[0], points[1]}) {
+				double slack_x = std::min(p.x, 1.0 - p.x);
+				double slack_y = std::min(p.y, 1.0 - p.y);
+				if (slack_x > 0.0)
+					min_zoom = std::max(min_zoom,
+						(fit_size * out_aspect) / (2.0 * image_width * slack_x));
+				if (slack_y > 0.0)
+					min_zoom = std::max(min_zoom,
+						fit_size / (2.0 * image_height * slack_y));
+			}
+
 			kf = {
-				points[0].x, points[0].y, zoom,
-				points[1].x, points[1].y, zoom,
+				points[0].x, points[0].y, min_zoom,
+				points[1].x, points[1].y, min_zoom,
 			};
 		}
 		break;
