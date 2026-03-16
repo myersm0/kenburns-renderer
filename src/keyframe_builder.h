@@ -77,7 +77,26 @@ inline Keyframe clamp_keyframe(
 		image_width, image_height, output_width, output_height);
 	auto e = clamp_center(kf.end_x, kf.end_y, kf.end_zoom,
 		image_width, image_height, output_width, output_height);
-	return {s.cx, s.cy, kf.start_zoom, e.cx, e.cy, kf.end_zoom};
+
+	Keyframe result = kf;
+	result.start_x = s.cx;
+	result.start_y = s.cy;
+	result.end_x = e.cx;
+	result.end_y = e.cy;
+
+	if (kf.curved) {
+		double min_zoom = std::min(kf.start_zoom, kf.end_zoom);
+		auto c1 = clamp_center(kf.ctrl1_x, kf.ctrl1_y, min_zoom,
+			image_width, image_height, output_width, output_height);
+		auto c2 = clamp_center(kf.ctrl2_x, kf.ctrl2_y, min_zoom,
+			image_width, image_height, output_width, output_height);
+		result.ctrl1_x = c1.cx;
+		result.ctrl1_y = c1.cy;
+		result.ctrl2_x = c2.cx;
+		result.ctrl2_y = c2.cy;
+	}
+
+	return result;
 }
 
 // ---- focal point computation ----
@@ -207,16 +226,38 @@ inline Keyframe apply_motion(
 		double dx = random_double(-drift_magnitude, drift_magnitude);
 		double dy = random_double(-drift_magnitude, drift_magnitude);
 		double dz = random_double(-0.1, 0.1) * zoom;
-		kf = {
-			focus.cx - dx * 0.5, focus.cy - dy * 0.5, zoom - dz * 0.5,
-			focus.cx + dx * 0.5, focus.cy + dy * 0.5, zoom + dz * 0.5,
-		};
+
+		double sx = focus.cx - dx * 0.5;
+		double sy = focus.cy - dy * 0.5;
+		double ex = focus.cx + dx * 0.5;
+		double ey = focus.cy + dy * 0.5;
+
+		double perp_x = -(ey - sy);
+		double perp_y = ex - sx;
+		double arc = random_double(-0.4, 0.4);
+
+		kf.start_x = sx;
+		kf.start_y = sy;
+		kf.start_zoom = zoom - dz * 0.5;
+		kf.end_x = ex;
+		kf.end_y = ey;
+		kf.end_zoom = zoom + dz * 0.5;
+		kf.ctrl1_x = sx + (ex - sx) / 3.0 + perp_x * arc;
+		kf.ctrl1_y = sy + (ey - sy) / 3.0 + perp_y * arc;
+		kf.ctrl2_x = sx + 2.0 * (ex - sx) / 3.0 + perp_x * arc;
+		kf.ctrl2_y = sy + 2.0 * (ey - sy) / 3.0 + perp_y * arc;
+		kf.curved = true;
 		break;
 	}
 
 	case MotionStyle::PanTo: {
 		if (points.size() < 2) {
-			kf = {focus.cx, focus.cy, zoom, focus.cx, focus.cy, zoom};
+			kf.start_x = focus.cx;
+			kf.start_y = focus.cy;
+			kf.start_zoom = zoom;
+			kf.end_x = focus.cx;
+			kf.end_y = focus.cy;
+			kf.end_zoom = zoom;
 		} else {
 			double out_aspect = (double)output_width / output_height;
 			double fit_size = std::max(image_width / out_aspect, (double)image_height);
@@ -233,10 +274,24 @@ inline Keyframe apply_motion(
 						fit_size / (2.0 * image_height * slack_y));
 			}
 
-			kf = {
-				points[0].x, points[0].y, min_zoom,
-				points[1].x, points[1].y, min_zoom,
-			};
+			double sx = points[0].x, sy = points[0].y;
+			double ex = points[1].x, ey = points[1].y;
+			double perp_x = -(ey - sy);
+			double perp_y = ex - sx;
+			double arc = random_double(0.15, 0.35);
+			if (random_double(0.0, 1.0) < 0.5) arc = -arc;
+
+			kf.start_x = sx;
+			kf.start_y = sy;
+			kf.start_zoom = min_zoom;
+			kf.end_x = ex;
+			kf.end_y = ey;
+			kf.end_zoom = min_zoom;
+			kf.ctrl1_x = sx + (ex - sx) / 3.0 + perp_x * arc;
+			kf.ctrl1_y = sy + (ey - sy) / 3.0 + perp_y * arc;
+			kf.ctrl2_x = sx + 2.0 * (ex - sx) / 3.0 - perp_x * arc;
+			kf.ctrl2_y = sy + 2.0 * (ey - sy) / 3.0 - perp_y * arc;
+			kf.curved = true;
 		}
 		break;
 	}

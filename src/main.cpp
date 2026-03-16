@@ -44,7 +44,16 @@ void write_pause_info(
 		<< ",\"kf_end_x\":" << params.kf_a.end_x
 		<< ",\"kf_end_y\":" << params.kf_a.end_y
 		<< ",\"kf_end_zoom\":" << params.kf_a.end_zoom
-		<< ",\"alpha\":" << params.alpha
+		<< ",\"curved\":" << (params.kf_a.curved ? "true" : "false");
+
+	if (params.kf_a.curved) {
+		file << ",\"ctrl1_x\":" << params.kf_a.ctrl1_x
+			<< ",\"ctrl1_y\":" << params.kf_a.ctrl1_y
+			<< ",\"ctrl2_x\":" << params.kf_a.ctrl2_x
+			<< ",\"ctrl2_y\":" << params.kf_a.ctrl2_y;
+	}
+
+	file << ",\"alpha\":" << params.alpha
 		<< "}" << std::endl;
 
 	file.close();
@@ -80,7 +89,7 @@ int main(int argc, char** argv) {
 
 	int wait_ms = 1000 / fps;
 
-	const char* window_name = "kenburns-renderer";
+	const char* window_name = "kbr";
 	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
 	cv::moveWindow(window_name, 0, 0);
 	cv::setWindowProperty(window_name, cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);

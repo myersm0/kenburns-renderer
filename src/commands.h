@@ -141,6 +141,15 @@ inline Command load(const std::string& content) {
 		cmd.kf.end_x = get_double(content, "end_x");
 		cmd.kf.end_y = get_double(content, "end_y");
 		cmd.kf.end_zoom = get_double(content, "end_zoom");
+
+		std::string ctrl_test = get_string(content, "ctrl1_x");
+		if (!ctrl_test.empty() || content.find("\"ctrl1_x\"") != std::string::npos) {
+			cmd.kf.ctrl1_x = get_double(content, "ctrl1_x");
+			cmd.kf.ctrl1_y = get_double(content, "ctrl1_y");
+			cmd.kf.ctrl2_x = get_double(content, "ctrl2_x");
+			cmd.kf.ctrl2_y = get_double(content, "ctrl2_y");
+			cmd.kf.curved = true;
+		}
 	}
 
 	return cmd;

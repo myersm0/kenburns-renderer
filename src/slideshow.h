@@ -16,6 +16,9 @@ struct CropState {
 struct Keyframe {
 	double start_x, start_y, start_zoom;
 	double end_x, end_y, end_zoom;
+	double ctrl1_x, ctrl1_y;
+	double ctrl2_x, ctrl2_y;
+	bool curved = false;
 };
 
 struct ImagePyramid {
@@ -50,6 +53,14 @@ inline double smoothstep(double t) {
 	return t * t * (3.0 - 2.0 * t);
 }
 
+inline double cubic_bezier(double t, double p0, double p1, double p2, double p3) {
+	double u = 1.0 - t;
+	return u * u * u * p0
+		+ 3.0 * u * u * t * p1
+		+ 3.0 * u * t * t * p2
+		+ t * t * t * p3;
+}
+
 inline CropState interpolate_crop(
 	double t_raw, Keyframe& kf,
 	int img_w, int img_h,
@@ -63,11 +74,16 @@ inline CropState interpolate_crop(
 	double crop_w = (fit_size * out_aspect) / zoom;
 	double crop_h = fit_size / zoom;
 
-	return {
-		(kf.start_x + (kf.end_x - kf.start_x) * t) * img_w,
-		(kf.start_y + (kf.end_y - kf.start_y) * t) * img_h,
-		crop_w, crop_h
-	};
+	double cx, cy;
+	if (kf.curved) {
+		cx = cubic_bezier(t, kf.start_x, kf.ctrl1_x, kf.ctrl2_x, kf.end_x);
+		cy = cubic_bezier(t, kf.start_y, kf.ctrl1_y, kf.ctrl2_y, kf.end_y);
+	} else {
+		cx = kf.start_x + (kf.end_x - kf.start_x) * t;
+		cy = kf.start_y + (kf.end_y - kf.start_y) * t;
+	}
+
+	return { cx * img_w, cy * img_h, crop_w, crop_h };
 }
 
 inline ImagePyramid* build_pyramid(cv::Mat& src) {

@@ -93,8 +93,36 @@ class Renderer {
 		cv::drawMarker(display, end, cv::Scalar(255, 100, 0),
 			cv::MARKER_TILTED_CROSS, 20, 2);
 
-		// line from start to end — motion path
-		cv::line(display, start, end, cv::Scalar(200, 200, 200), 1);
+		// motion path
+		if (kf.curved) {
+			const int segments = 32;
+			for (int i = 0; i < segments; i++) {
+				double t0 = (double)i / segments;
+				double t1 = (double)(i + 1) / segments;
+				auto b = [&](double t, double p0, double p1, double p2, double p3) {
+					double u = 1.0 - t;
+					return u*u*u*p0 + 3.0*u*u*t*p1 + 3.0*u*t*t*p2 + t*t*t*p3;
+				};
+				cv::Point a_pt = image_to_screen(
+					b(t0, kf.start_x, kf.ctrl1_x, kf.ctrl2_x, kf.end_x),
+					b(t0, kf.start_y, kf.ctrl1_y, kf.ctrl2_y, kf.end_y),
+					crop, src_w, src_h);
+				cv::Point b_pt = image_to_screen(
+					b(t1, kf.start_x, kf.ctrl1_x, kf.ctrl2_x, kf.end_x),
+					b(t1, kf.start_y, kf.ctrl1_y, kf.ctrl2_y, kf.end_y),
+					crop, src_w, src_h);
+				cv::line(display, a_pt, b_pt, cv::Scalar(200, 200, 200), 1);
+			}
+			// control points — small cyan diamonds
+			cv::Point c1 = image_to_screen(kf.ctrl1_x, kf.ctrl1_y, crop, src_w, src_h);
+			cv::Point c2 = image_to_screen(kf.ctrl2_x, kf.ctrl2_y, crop, src_w, src_h);
+			cv::drawMarker(display, c1, cv::Scalar(255, 255, 0),
+				cv::MARKER_DIAMOND, 12, 1);
+			cv::drawMarker(display, c2, cv::Scalar(255, 255, 0),
+				cv::MARKER_DIAMOND, 12, 1);
+		} else {
+			cv::line(display, start, end, cv::Scalar(200, 200, 200), 1);
+		}
 
 		// current center — white crosshair
 		int cx = out_size.width / 2;
