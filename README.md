@@ -51,6 +51,8 @@ This cycles through three images with different motion styles (drift with curved
 
 The program opens a fullscreen OpenCV window and enters its render loop. It reads commands from `<command_dir>/command.json` and writes status to `<command_dir>/status.json`.
 
+The idle timeout is refreshed by both IPC commands and keypresses.
+
 ## Headless output
 
 With `--output`, kbr skips the window and writes frames directly. The controller drives it via IPC as usual and sends `quit` when done.
@@ -154,11 +156,19 @@ Each frame follows this path:
 
 Each image is decomposed into a Gaussian pyramid via `pyrDown`. Per frame, the renderer selects the level whose resolution is closest to 1:1 with the output crop, eliminating aliasing artifacts on fine detail (foliage, hair, fabric textures). Memory overhead is 1.33× the source image. The preloader thread builds the next image's pyramid in the background during the hold phase.
 
+### Preloader
+
+The preloader thread services one request at a time, and every request carries the sequence number of the `load` command that issued it. When a worker finishes, it compares its own sequence against the current request before publishing: a result superseded by a newer request is discarded rather than stored. Readiness is therefore always attributable to a specific load — a stale pyramid from a superseded request can never be collected by a later `transition` or `swap`.
+
 ### State machine
 
 `SlideshowState` manages three phases: Idle (waiting for the first image), Holding (displaying an image with Ken Burns animation), and Transitioning (crossfading between current and next image). Transitions are explicitly triggered via the `transition` command. The state machine never auto-advances — the controlling process decides timing.
 
+A `load` arriving while an image is displayed buffers its keyframe (raw or style-derived) alongside the preload request; nothing touches the live animation until the incoming pyramid is collected by a `transition` or `swap`. Loading during a crossfade is therefore safe and does not disturb the fade in progress.
+
 ## IPC Protocol
+
+The protocol is sequence-acknowledged: every command carries a `seq`, and the status file reports which sequence was last processed and whether it was accepted. Controllers should keep at most one command in flight — send, wait for acknowledgment, then send the next. This makes acknowledgments edges rather than levels, and prevents the single command slot from being overwritten before kbr reads it.
 
 ### Commands (controller → kbr)
 
@@ -166,11 +176,14 @@ Write JSON to `<command_dir>/command.json` via atomic rename from a `.tmp` file.
 
 The JSON parser accepts flat objects with string and numeric values, no nesting. No escaped quotes within strings. This is sufficient because both producer and consumer are under your control.
 
+Every command may carry a `seq` field: a positive integer, monotonically increasing per session. If omitted, kbr assigns the previous sequence plus one, so controllers predating this protocol still produce distinguishable acknowledgments — but cannot correlate them, and should be updated.
+
 **Load with style (kbr computes keyframe):**
 
 ```json
 {
     "command": "load",
+    "seq": 12,
     "path": "/absolute/path/to/image.jpg",
     "focus": "random",
     "zoom": "random",
@@ -188,6 +201,7 @@ The JSON parser accepts flat objects with string and numeric values, no nesting.
 ```json
 {
     "command": "load",
+    "seq": 13,
     "path": "/absolute/path/to/image.jpg",
     "start_x": 0.5, "start_y": 0.5, "start_zoom": 1.0,
     "end_x": 0.4, "end_y": 0.4, "end_zoom": 1.5
@@ -199,14 +213,16 @@ Optionally include `ctrl1_x`, `ctrl1_y`, `ctrl2_x`, `ctrl2_y` for a curved path.
 **Other commands:**
 
 ```json
-{"command": "transition"}
-{"command": "swap"}
-{"command": "cancel"}
-{"command": "quit"}
-{"command": "config", "key": "blur", "value": 0.3}
+{"command": "transition", "seq": 14}
+{"command": "swap", "seq": 15}
+{"command": "cancel", "seq": 16}
+{"command": "quit", "seq": 17}
+{"command": "config", "seq": 18, "key": "blur", "value": 0.3}
 ```
 
 `transition` starts a crossfade to the preloaded image. `swap` immediately replaces the current image (either completing a transition or cutting without a fade). `cancel` aborts a transition in progress and returns to holding. Config keys: `blur` (motion blur strength), `hold` (hold duration in seconds), `fade` (fade duration in seconds).
+
+Commands are legal only in certain states: `transition` requires Holding with a ready preload, `swap` requires Transitioning or Holding-with-ready-preload, `cancel` requires Transitioning. An illegal command is rejected — reported via `accepted`, never silently dropped.
 
 ### Status (kbr → controller)
 
@@ -219,9 +235,17 @@ Written on state changes to `<command_dir>/status.json` (atomic rename):
     "fade_complete": false,
     "paused": false,
     "source_w": 2400,
-    "source_h": 1600
+    "source_h": 1600,
+    "last_seq": 12,
+    "accepted": true,
+    "preload_seq": 12,
+    "preload_failed_seq": 0
 }
 ```
+
+`last_seq` is the sequence of the most recently processed command, and `accepted` whether it was legal in the state that received it. A controller waits for `last_seq` to reach its command's sequence, then reads `accepted` to learn the outcome. A rejected command leaves state unchanged; the controller decides whether to retry, wait, or take another path.
+
+`preload_seq` is the sequence of the `load` whose pyramid is currently ready, or 0 if none is. Controllers should test `preload_seq == my_load_seq` rather than the bare `preload_ready` boolean: the boolean cannot distinguish a preload for the image you just requested from one for an image you have since superseded. `preload_failed_seq` reports a load whose image could not be read, so a bad path surfaces as an immediate error rather than a wait that never ends.
 
 `source_w` and `source_h` are the pixel dimensions of the currently displayed image. They are 0 before any image is loaded. This is useful for controllers that run external analysis and need to convert pixel coordinates to the normalized [0,1] coordinates that the `points` field expects: `point_x = pixel_x / source_w`.
 
@@ -251,6 +275,8 @@ When a `load` command includes `focus`/`zoom`/`motion` fields, kbr computes the 
 | `fit`        | Zoom to fill the output without borders               |
 | `fit_points` | Zoom to contain all `points` with `padding`           |
 
+Note that `points` carries bare coordinates, so `union` and `fit_points` operate on the extent of the point set. Controllers wanting to frame a region should send its corners as two points rather than its center as one.
+
 ### Motion styles
 
 | Value      | Behavior                                                |
@@ -262,6 +288,8 @@ When a `load` command includes `focus`/`zoom`/`motion` fields, kbr computes the 
 | `pan_to`   | S-curve from first point to second point in `points`   |
 
 `drift` generates a C-shaped arc by offsetting control points perpendicular to the motion direction. `pan_to` generates an S-curve with control points deflected in opposite directions, giving a natural "look at this, now look at that" camera feel. Both compute a minimum zoom that keeps both endpoints visible, so the pan direction is never squashed by clamping.
+
+The `zoom_in` and `zoom_out` amplitudes are fixed at ±15% and are not adjustable from the load command; controllers needing a gentler or stronger zoom must send a raw keyframe instead.
 
 All keyframes (including control points) are automatically clamped to avoid unnecessary black borders.
 
@@ -284,6 +312,14 @@ g++ -o test_keyframe test/test_keyframe.cpp -Isrc -std=c++17 -O2
 
 This exercises clamping, focus computation, zoom calculation, motion styles, curve generation, and integration through `build_keyframe`.
 
+The IPC protocol has an integration test that drives a headless kbr through the acknowledgment and preload-identity paths, including rejected commands, superseded preloads, and failed image loads:
+
+```bash
+python test/test_protocol.py ./kbr demo/images
+```
+
+It expects a `huge_noise.png` in the image directory alongside the generated demo images — any large, slow-to-decode image will do — so that preloads take long enough to exercise the race windows.
+
 ## Project structure
 
 ```
@@ -297,7 +333,8 @@ kenburns-renderer/
 │   ├── renderer.h
 │   └── slideshow.h
 ├── test/
-│   └── test_keyframe.cpp
+│   ├── test_keyframe.cpp
+│   └── test_protocol.py
 └── demo/
     ├── demo.jl
     ├── generate_images.py
