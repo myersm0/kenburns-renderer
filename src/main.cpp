@@ -135,7 +135,11 @@ int main(int argc, char** argv) {
 	bool prev_preload = false;
 	bool prev_fade_complete = false;
 	bool prev_paused = false;
+	uint64_t prev_preload_failed_seq = 0;
 	bool status_dirty = true;
+
+	uint64_t last_seq = 0;
+	bool last_accepted = true;
 
 	auto write_status = [&]() {
 		std::string phase_str;
@@ -146,7 +150,9 @@ int main(int argc, char** argv) {
 		}
 		status_writer.write(phase_str, state.preload_ready(),
 			state.fade_complete(), paused,
-			last_params.debug_source_w, last_params.debug_source_h);
+			last_params.debug_source_w, last_params.debug_source_h,
+			last_seq, last_accepted,
+			state.preload_seq(), state.preload_failed_seq());
 	};
 
 	write_status();
@@ -156,24 +162,25 @@ int main(int argc, char** argv) {
 
 		if (cmd.type != CommandType::None) {
 			last_command_time = std::chrono::steady_clock::now();
+			last_seq = cmd.seq > 0 ? cmd.seq : last_seq + 1;
 			status_dirty = true;
 		}
 
 		switch (cmd.type) {
 		case CommandType::Load:
 			if (cmd.has_style)
-				state.load_with_style(cmd.path, cmd.style);
+				last_accepted = state.load_with_style(cmd.path, cmd.style, last_seq);
 			else
-				state.load(cmd.path, cmd.kf);
+				last_accepted = state.load(cmd.path, cmd.kf, last_seq);
 			break;
 		case CommandType::Transition:
-			state.start_transition();
+			last_accepted = state.start_transition();
 			break;
 		case CommandType::Swap:
-			state.swap();
+			last_accepted = state.swap();
 			break;
 		case CommandType::Cancel:
-			state.cancel_transition();
+			last_accepted = state.cancel_transition();
 			break;
 		case CommandType::Config:
 			if (cmd.config_key == "blur")
@@ -182,6 +189,7 @@ int main(int argc, char** argv) {
 				state.set_hold(cmd.config_value, fps);
 			else if (cmd.config_key == "fade")
 				state.set_fade(cmd.config_value, fps);
+			last_accepted = true;
 			break;
 		case CommandType::Quit:
 			_exit(0);
@@ -211,6 +219,9 @@ int main(int argc, char** argv) {
 			int keypress = renderer.render(
 				"kbr", last_params, state.blur_strength, wait_ms, debug);
 
+			if (keypress >= 0)
+				last_command_time = std::chrono::steady_clock::now();
+
 			if (keypress == key_pause) {
 				paused = !paused;
 				status_dirty = true;
@@ -229,14 +240,17 @@ int main(int argc, char** argv) {
 		SlideshowPhase cur_phase = state.get_phase();
 		bool cur_preload = state.preload_ready();
 		bool cur_fade_complete = state.fade_complete();
+		uint64_t cur_preload_failed_seq = state.preload_failed_seq();
 
 		if (cur_phase != prev_phase || cur_preload != prev_preload ||
 				cur_fade_complete != prev_fade_complete ||
+				cur_preload_failed_seq != prev_preload_failed_seq ||
 				paused != prev_paused || status_dirty) {
 			write_status();
 			prev_phase = cur_phase;
 			prev_preload = cur_preload;
 			prev_fade_complete = cur_fade_complete;
+			prev_preload_failed_seq = cur_preload_failed_seq;
 			prev_paused = paused;
 			status_dirty = false;
 		}

@@ -5,6 +5,8 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
 
 // ---- data types ----
 
@@ -130,12 +132,14 @@ class Preloader {
 	std::condition_variable request_cv;
 
 	std::string requested_path;
+	uint64_t requested_seq = 0;
 	bool has_request = false;
 	std::atomic<bool> shutdown{false};
 
-	cv::Mat loaded_image;
 	ImagePyramid* loaded_pyramid = nullptr;
-	std::atomic<bool> result_ready{false};
+	uint64_t loaded_seq = 0;
+	uint64_t failed_seq = 0;
+	bool result_ready = false;
 
 	void run() {
 		while (!shutdown) {
@@ -144,6 +148,7 @@ class Preloader {
 			if (shutdown) return;
 
 			std::string path = requested_path;
+			uint64_t seq = requested_seq;
 			has_request = false;
 			lock.unlock();
 
@@ -153,26 +158,50 @@ class Preloader {
 				pyr = build_pyramid(img);
 
 			std::lock_guard<std::mutex> guard(mtx);
+			if (seq != requested_seq) {
+				// a newer request arrived while loading; discard stale result
+				if (pyr) delete pyr;
+				continue;
+			}
 			if (loaded_pyramid)
 				delete loaded_pyramid;
-			loaded_image = img;
 			loaded_pyramid = pyr;
-			result_ready = true;
+			if (pyr) {
+				loaded_seq = seq;
+				result_ready = true;
+			} else {
+				failed_seq = seq;
+			}
 		}
 	}
 
 public:
 	void start() { worker = std::thread([this]{ run(); }); }
 
-	void request(const std::string& path) {
+	void request(const std::string& path, uint64_t seq) {
 		std::lock_guard<std::mutex> lock(mtx);
 		requested_path = path;
+		requested_seq = seq;
 		has_request = true;
 		result_ready = false;
+		failed_seq = 0;
 		request_cv.notify_one();
 	}
 
-	bool ready() { return result_ready; }
+	bool ready() {
+		std::lock_guard<std::mutex> lock(mtx);
+		return result_ready;
+	}
+
+	uint64_t ready_seq() {
+		std::lock_guard<std::mutex> lock(mtx);
+		return result_ready ? loaded_seq : 0;
+	}
+
+	uint64_t load_failed_seq() {
+		std::lock_guard<std::mutex> lock(mtx);
+		return failed_seq;
+	}
 
 	ImagePyramid* collect() {
 		std::lock_guard<std::mutex> lock(mtx);
@@ -202,6 +231,8 @@ class SlideshowState {
 	Preloader loader;
 	KeyframeParams pending_style;
 	bool has_pending_style = false;
+	Keyframe pending_keyframe;
+	bool has_pending_keyframe = false;
 
 	ImagePyramid* current_pyramid = nullptr;
 	Keyframe current_keyframe;
@@ -252,27 +283,32 @@ public:
 
 	SlideshowPhase get_phase() { return phase; }
 	bool preload_ready() { return loader.ready(); }
+	uint64_t preload_seq() { return loader.ready_seq(); }
+	uint64_t preload_failed_seq() { return loader.load_failed_seq(); }
 	bool fade_complete() { return fade_complete_flag; }
 
-	void load(const std::string& path, Keyframe kf) {
+	bool load(const std::string& path, Keyframe kf, uint64_t seq) {
 		if (phase == SlideshowPhase::Idle) {
 			cv::Mat img = cv::imread(path);
-			if (img.empty()) return;
+			if (img.empty()) return false;
 			current_pyramid = build_pyramid(img);
 			current_keyframe = kf;
 			current_frame = 0;
 			phase = SlideshowPhase::Holding;
 		} else {
-			next_keyframe = kf;
+			pending_keyframe = kf;
+			has_pending_keyframe = true;
+			has_pending_style = false;
 			next_path = path;
-			loader.request(path);
+			loader.request(path, seq);
 		}
+		return true;
 	}
 
-	void load_with_style(const std::string& path, KeyframeParams& style) {
+	bool load_with_style(const std::string& path, KeyframeParams& style, uint64_t seq) {
 		if (phase == SlideshowPhase::Idle) {
 			cv::Mat img = cv::imread(path);
-			if (img.empty()) return;
+			if (img.empty()) return false;
 			current_pyramid = build_pyramid(img);
 			current_keyframe = build_keyframe(style,
 				img.cols, img.rows, output_width, output_height);
@@ -282,9 +318,11 @@ public:
 		} else {
 			pending_style = style;
 			has_pending_style = true;
+			has_pending_keyframe = false;
 			next_path = path;
-			loader.request(path);
+			loader.request(path, seq);
 		}
+		return true;
 	}
 
 	bool start_transition() {
@@ -300,6 +338,10 @@ public:
 				output_width, output_height);
 			next_points = extract_points(pending_style);
 			has_pending_style = false;
+		} else if (has_pending_keyframe) {
+			next_keyframe = pending_keyframe;
+			next_points.clear();
+			has_pending_keyframe = false;
 		}
 
 		transition_start_frame = current_frame;
@@ -330,6 +372,10 @@ public:
 					output_width, output_height);
 				next_points = extract_points(pending_style);
 				has_pending_style = false;
+			} else if (has_pending_keyframe) {
+				next_keyframe = pending_keyframe;
+				next_points.clear();
+				has_pending_keyframe = false;
 			}
 			if (current_pyramid) delete current_pyramid;
 			current_pyramid = incoming;

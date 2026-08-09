@@ -25,6 +25,7 @@ enum class CommandType {
 
 struct Command {
 	CommandType type = CommandType::None;
+	uint64_t seq = 0;
 	std::string path;
 	Keyframe kf;
 	KeyframeParams style;
@@ -234,6 +235,8 @@ public:
 			cmd.config_value = parse::get_double(content, "value");
 		}
 
+		cmd.seq = (uint64_t)parse::get_double(content, "seq");
+
 		return cmd;
 	}
 };
@@ -250,7 +253,9 @@ public:
 
 	void write(const std::string& phase, bool preload_ready,
 		bool fade_complete, bool paused,
-		int source_w = 0, int source_h = 0
+		int source_w, int source_h,
+		uint64_t last_seq, bool accepted,
+		uint64_t preload_seq, uint64_t preload_failed_seq
 	) {
 		std::ofstream file(tmp_path);
 		if (!file.is_open()) return;
@@ -261,7 +266,11 @@ public:
 			<< "\"fade_complete\":" << (fade_complete ? "true" : "false") << ","
 			<< "\"paused\":" << (paused ? "true" : "false") << ","
 			<< "\"source_w\":" << source_w << ","
-			<< "\"source_h\":" << source_h
+			<< "\"source_h\":" << source_h << ","
+			<< "\"last_seq\":" << last_seq << ","
+			<< "\"accepted\":" << (accepted ? "true" : "false") << ","
+			<< "\"preload_seq\":" << preload_seq << ","
+			<< "\"preload_failed_seq\":" << preload_failed_seq
 			<< "}" << std::endl;
 
 		file.close();
